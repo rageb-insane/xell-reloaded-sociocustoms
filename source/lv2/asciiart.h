@@ -17,4 +17,4 @@ static char* asciiart = "\n"
 	"|                                                                                                                                     \n"
 	" \)                                                                                                                                   \n\n";
 static char* asciitail =
-	"              Free60.org XeLL RELOADED - Xenon Linux Loader\n\n";
+	"              Thank you for supporting and choosing me <3 - For Support Message: @socioculture on Discord\n\n";
