@@ -1,11 +1,11 @@
 name: build
 
-on: [push, pull_request, workflow_dispatch]
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: npmaile/libxenon-builder:latest
+    container: free60/libxenon:latest
 
     steps:
     - uses: actions/checkout@v4
@@ -16,6 +16,8 @@ jobs:
         echo DEVKITXENON=/usr/local/xenon >> $GITHUB_ENV
         echo /usr/local/xenon/bin >> $GITHUB_PATH
         echo /usr/local/xenon/usr/bin >> $GITHUB_PATH
+    - name: Prepare Git for build
+      run: git config --global --add safe.directory $GITHUB_WORKSPACE
     - name: Build
       run: make
     - name: Build (dist)
