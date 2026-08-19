@@ -130,7 +130,11 @@ void kboot_set_config(void)
 	
 	if(conf.speedup >= XENON_SPEED_FULL && conf.speedup <= XENON_SPEED_1_3){ //speedmode: drivers/xenon_soc/xenon_power.h
 		printf("Speeding up CPU\n");
+		/* same VID/core chatter as the boot-time call in main() - keep it off
+		 * the screen here too */
+		console_close();
 		xenon_make_it_faster(conf.speedup);
+		console_open();
 	}
         
 }
