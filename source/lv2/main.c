@@ -168,6 +168,69 @@ static void network_dhcp_poll(void)
 }
 #endif
 
+/* libxenon's print_cpu_dvd_keys() draws every line in the one console colour,
+ * so XeLL prints these itself instead - same lines, same order, same failure
+ * messages, but the cpu key's digits come out green while its label doesn't.
+ *
+ * kv_get_cserial()/print_cserial() have external linkage in libxenon's
+ * xb360.c but never made it into xb360.h, hence the declarations here. */
+extern int kv_get_cserial(unsigned char *serial);
+extern void print_cserial(char *name, unsigned char *data);
+
+static void print_key_green(char *name, unsigned char *data)
+{
+	unsigned int bg = console_color[0], fg = console_color[1];
+	int i;
+
+	printf("%s: ", name);
+
+	console_set_colors(bg, CONSOLE_COLOR_GREEN);
+	for (i = 0; i < 16; i++)
+		printf("%02X", data[i]);
+	console_set_colors(bg, fg);
+
+	printf("\n");
+}
+
+static void print_console_keys(void)
+{
+	unsigned char key[0x10];
+	unsigned char cserial[0xC];
+
+	printf("\n");
+
+	memset(key, '\0', sizeof(key));
+	if (cpu_get_key(key) == 0)
+		print_key_green(" * CPU key", key);
+
+	if (xenon_logical_nand_data_ok() != 0)
+	{
+		printf(" ! Unable to read Keyvault data from NAND\n");
+		printf(" ! xenon_logical_nand_data_ok error\n");
+	}
+	else if (KV_FLASH_OFFSET == 0 || KV_FLASH_SIZE == 0)
+	{
+		printf(" ! Unable to read Keyvault data from NAND\n");
+		printf(" ! Keyvault size or offset is zero\n");
+	}
+	else
+	{
+		memset(key, '\0', sizeof(key));
+		if (get_virtual_cpukey(key) == 0)
+			print_key(" * Virtual CPU key", key);
+
+		memset(key, '\0', sizeof(key));
+		if (kv_get_dvd_key(key) == 0)
+			print_key(" * DVD key", key);
+
+		memset(cserial, '\0', sizeof(cserial));
+		if (kv_get_cserial(cserial) == 0)
+			print_cserial(" * Serial", cserial);
+	}
+
+	printf("\n");
+}
+
 void reset_timebase_task()
 {
 	mtspr(284,0); // TBLW
@@ -313,7 +376,7 @@ int main(){
 			(unsigned int)(fuseline[i+6]&0xffffffff));
 	}
 
-	print_cpu_dvd_keys();
+	print_console_keys();
 #endif
 
 	/* Everything from here to the file scan is driver bring-up noise - XeLL's
