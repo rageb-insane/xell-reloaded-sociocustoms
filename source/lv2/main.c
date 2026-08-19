@@ -227,7 +227,7 @@ int main(){
 #elif defined XTUDO_THEME
 	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_PINK); // Pink text on black bg
 #elif defined DEFAULT_THEME
-	console_set_colors(CONSOLE_COLOR_BLUE,CONSOLE_COLOR_WHITE); // White text on blue bg
+	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_WHITE); // White text on black bg
 #else
 	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_GREEN); // Green text on black bg
 #endif
@@ -241,7 +241,13 @@ int main(){
 	
 	xenon_sound_init();
 
+	/* xenon_make_it_faster()/xenon_set_speed() natter about VIDs and cores
+	 * waking back up. Drop the screen hook while they run so none of it shows
+	 * - the work still happens, and the log still records it. */
+	console_close();
 	xenon_make_it_faster(XENON_SPEED_FULL);
+	console_open();
+
 	if (xenon_get_console_type() != REV_CORONA_PHISON) //Not needed for MMC type of consoles! ;)
 	{
 		printf(" * nand init\n");
@@ -269,18 +275,30 @@ int main(){
 
 #ifndef NO_PRINT_CONFIG
 	printf(" * FUSES - write them down and keep them safe:\n");
+	u64 fuseline[12];
 	char *fusestr = FUSES;
 	for (i=0; i<12; ++i){
-		u64 line;
 		unsigned int hi,lo;
 
-		line=xenon_secotp_read_line(i);
-		hi=line>>32;
-		lo=line&0xffffffff;
+		fuseline[i]=xenon_secotp_read_line(i);
+		hi=fuseline[i]>>32;
+		lo=fuseline[i]&0xffffffff;
 
+		/* the flat one-per-line dump is what the httpd /FUSE download hands
+		 * out, so keep building it exactly as before */
 		fusestr += sprintf(fusestr, "fuseset %02d: %08x%08x\n", i, hi, lo);
 	}
-	printf(FUSES);
+
+	/* on screen they go two columns wide, 0-5 on the left, 6-11 on the right */
+	for (i=0; i<6; ++i){
+		printf("   fuseset %02d: %08x%08x     fuseset %02d: %08x%08x\n",
+			i,
+			(unsigned int)(fuseline[i]>>32),
+			(unsigned int)(fuseline[i]&0xffffffff),
+			i+6,
+			(unsigned int)(fuseline[i+6]>>32),
+			(unsigned int)(fuseline[i+6]&0xffffffff));
+	}
 
 	print_cpu_dvd_keys();
 #endif
