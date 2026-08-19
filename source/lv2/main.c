@@ -233,8 +233,17 @@ int main(){
 #endif
 	console_init();
 
+	/* console_init() announces the framebuffer the instant it arms the screen
+	 * hook, so there's no muting it - wipe the screen instead. clrscr also
+	 * puts the cursor back to 0,0, so the splash starts at the top. */
+	console_clrscr();
+
+	/* version banner goes to the log and the uart, not the screen */
+	console_close();
 	printf("\nXeLL - Xenon linux loader second stage " LONGVERSION "\n");
     printf("\nBuilt with GCC " GCC_VERSION " and Binutils " BINUTILS_VERSION " \n");
+	console_open();
+
 	do_asciiart();
 
 	//delay(3); //give the user a chance to see our splash screen <- network init should last long enough...
