@@ -250,8 +250,12 @@ int main(){
 
 	if (xenon_get_console_type() != REV_CORONA_PHISON) //Not needed for MMC type of consoles! ;)
 	{
+		/* nand bring-up is only worth showing when it goes wrong */
+		console_close();
 		printf(" * nand init\n");
 		sfcx_init();
+		console_open();
+
 		if (sfc.initialized != SFCX_INITIALIZED)
 		{
 			printf(" ! sfcx initialization failure\n");
@@ -303,6 +307,11 @@ int main(){
 	print_cpu_dvd_keys();
 #endif
 
+	/* Everything from here to the file scan is driver bring-up noise - XeLL's
+	 * own status lines plus whatever lwip, the PHY, USB and ATA feel like
+	 * saying. Keep the whole run off the screen; the log still records it. */
+	console_close();
+
 #ifndef NO_NETWORKING
 
 	printf(" * network init\n");
@@ -329,6 +338,9 @@ int main(){
 #endif
 
 	mount_all_devices();
+
+	/* back on screen for the dhcp result and the file scan */
+	console_open();
 
 #ifndef NO_NETWORKING
 	/* the drive init above gave DHCP plenty of wall clock time to answer,
