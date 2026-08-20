@@ -204,6 +204,90 @@ static void network_dhcp_poll(void)
 extern int kv_get_cserial(unsigned char *serial);
 extern void print_cserial(char *name, unsigned char *data);
 
+/* Die codename per console generation, for the processor line. The console
+ * type itself is detected; this table just names the silicon that goes with
+ * it. Vejle is the 45nm XCGPU's real name - "Valhalla" was only its working
+ * name before the chip was finalised, though it stuck in a lot of places. */
+static const char *cpuNames[] =
+{
+	"Waternoose",	/* Xenon         - 90nm CPU */
+	"Waternoose",	/* Zephyr        - 90nm CPU */
+	"Loki",		/* Falcon        - 65nm CPU */
+	"Loki",		/* Jasper        - 65nm CPU */
+	"Vejle",	/* Trinity       - 45nm XCGPU */
+	"Vejle",	/* Corona        - 45nm XCGPU */
+	"Vejle",	/* Corona MMC    - 45nm XCGPU */
+	"Vejle",	/* Winchester    - 45nm XCGPU */
+	"Vejle",	/* Winchester MMC- 45nm XCGPU */
+};
+
+/* Print s in colour, then put the console back how we found it. */
+static void print_coloured(unsigned int colour, const char *s)
+{
+	unsigned int bg = console_color[0], fg = console_color[1];
+
+	console_set_colors(bg, colour);
+	printf("%s", s);
+	console_set_colors(bg, fg);
+}
+
+static void status_line(const char *label, const char *state, unsigned int colour)
+{
+	printf("   %s... ", label);
+	print_coloured(colour, state);
+	printf("\n");
+}
+
+/* Fuses blow four bits at a time, so a loader data version is the number of
+ * blown nibbles: fuseline 2 carries the CB LDV, lines 7-11 the CF/CG LDV. */
+static int fuse_ldv(const u64 *fuseline, int first, int last)
+{
+	int i, bits = 0;
+
+	for (i = first; i <= last; i++)
+	{
+		u64 v = fuseline[i];
+
+		while (v)
+		{
+			bits += v & 1;
+			v >>= 1;
+		}
+	}
+
+	return bits / 4;
+}
+
+/* ATA model strings come back space padded. */
+static const char *ata_model(struct xenon_ata_device *dev)
+{
+	static char buf[sizeof(dev->model) + 1];
+	int n;
+
+	memcpy(buf, dev->model, sizeof(dev->model));
+	buf[sizeof(dev->model)] = '\0';
+
+	/* libxenon terminates at 40 chars for ata and 24 for atapi, so trim back
+	 * from the real string end - anything past it is uninitialised. */
+	for (n = strlen(buf) - 1; n >= 0 && buf[n] == ' '; n--)
+		buf[n] = '\0';
+
+	return buf;
+}
+
+static void detect_line(const char *label, int present, struct xenon_ata_device *dev)
+{
+	printf("   Detecting %s... ", label);
+
+	if (present)
+		printf("%s\n", ata_model(dev));
+	else
+	{
+		print_coloured(CONSOLE_COLOR_GREY, "None");
+		printf("\n");
+	}
+}
+
 static void print_key_green(char *name, unsigned char *data)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
@@ -282,10 +366,20 @@ void synchronize_timebases()
 	std((void*)0x200611a0,0x1ff); // restart timebase
 }
 	
+/* how the nand came up - reported after the fuses and keys, not while it runs */
+#define NAND_SKIPPED 0
+#define NAND_OK      1
+#define NAND_FAILED  2
+
 int main(){
 	LogInit();
 	int i;
 	int consoleType = 0;
+	int nandStatus = NAND_SKIPPED;
+	int ataPresent = 0, atapiPresent = 0;
+#ifndef NO_NETWORKING
+	int netStatus = NETWORK_INIT_FAILURE;
+#endif
 
 	printf("ANA Dump before Init:\n");
 	dumpana();
@@ -329,14 +423,17 @@ int main(){
 	console_clrscr();
 	draw_logo();
 
-	/* version banner goes to the log and the uart, not the screen */
+	printf("SocioCustoms XeLL " VERSION "\n");
+	printf("Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
+
+	/* build details go to the log and the uart, not the screen */
 	console_close();
-	printf("\nXeLL - Xenon linux loader second stage " LONGVERSION "\n");
-    printf("\nBuilt with GCC " GCC_VERSION " and Binutils " BINUTILS_VERSION " \n");
+	printf("XeLL - Xenon linux loader second stage " LONGVERSION "\n");
+	printf("Built with GCC " GCC_VERSION " and Binutils " BINUTILS_VERSION " \n");
 	console_open();
 
 	//delay(3); //give the user a chance to see our splash screen <- network init should last long enough...
-	
+
 	xenon_sound_init();
 
 	/* xenon_make_it_faster()/xenon_set_speed() natter about VIDs and cores
@@ -346,13 +443,17 @@ int main(){
 	xenon_make_it_faster(XENON_SPEED_FULL);
 	console_open();
 
+	/* The nand has to come up before the keyvault can be read, so it runs
+	 * here - silently - and gets reported further down with the rest of the
+	 * init results, after the fuses and keys the user actually came for. */
 	if (xenon_get_console_type() != REV_CORONA_PHISON) //Not needed for MMC type of consoles! ;)
 	{
-		/* nand bring-up is only worth showing when it goes wrong */
 		console_close();
 		printf(" * nand init\n");
 		sfcx_init();
 		console_open();
+
+		nandStatus = (sfc.initialized == SFCX_INITIALIZED) ? NAND_OK : NAND_FAILED;
 
 		if (sfc.initialized != SFCX_INITIALIZED)
 		{
@@ -403,22 +504,23 @@ int main(){
 	}
 
 	print_console_keys();
+
+	printf(" * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
+	printf(" * CF/CG LDV: %d\n", fuse_ldv(fuseline, 7, 11));
 #endif
 
-	/* Everything from here to the file scan is driver bring-up noise - XeLL's
-	 * own status lines plus whatever lwip, the PHY, USB and ATA feel like
-	 * saying. Keep the whole run off the screen; the log still records it. */
+	/* Bring the drivers up with the screen hook off - all of it, lwip, the
+	 * PHY, USB enumeration and the ATA probes, is noise. We keep the results
+	 * and report them tidily below. The log still records the raw output. */
 	console_close();
 
 #ifndef NO_NETWORKING
-
 	printf(" * network init\n");
-	network_start();
+	netStatus = network_start();
 
 	printf(" * starting httpd server...");
 	httpd_start();
 	printf("success\n");
-
 #endif
 
 	printf(" * usb init\n");
@@ -428,17 +530,58 @@ int main(){
 	// FIXME: Not initializing these devices here causes an interrupt storm in
 	// linux.
 	printf(" * sata hdd init\n");
-	xenon_ata_init();
+	ataPresent = (xenon_ata_init() == 0);
 
 #ifndef NO_DVD
 	printf(" * sata dvd init\n");
-	xenon_atapi_init();
+	atapiPresent = (xenon_atapi_init() == 0);
 #endif
 
 	mount_all_devices();
 
 	/* back on screen for the dhcp result and the file scan */
 	console_open();
+
+	/* What the hardware turned out to be. There's no register that reports the
+	 * core clock, so take it from libxenon's own timebase constant (the
+	 * timebase runs at core/64) rather than hardcoding a number here. */
+	printf("\n   Microsoft %s %08x %u.%03uGHz Processor\n",
+		 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
+		 mfspr(287),
+		 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
+		 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
+	printf("   Memory Test :  %uK OK\n\n", xenon_get_ram_size() / 1024);
+
+	detect_line("Primary Master   ", ataPresent, &ata);
+	detect_line("Secondary Master ", atapiPresent, &atapi);
+
+	/* how the bring-up went */
+	printf("\n");
+	switch (nandStatus)
+	{
+	case NAND_OK:
+		status_line("NAND init", "success", CONSOLE_SUCCESS);
+		break;
+	case NAND_FAILED:
+		status_line("NAND init", "failed", CONSOLE_ERR);
+		break;
+	default:
+		status_line("NAND init", "mmc console, skipped", CONSOLE_WARN);
+		break;
+	}
+
+#ifndef NO_NETWORKING
+	if (netif.ip_addr.addr)
+		status_line("Network init", "dhcp lease acquired", CONSOLE_SUCCESS);
+	else if (netStatus == NETWORK_INIT_SUCCESS)
+		status_line("Network init", "dhcp requested", CONSOLE_WARN);
+	else
+		status_line("Network init", "failed", CONSOLE_ERR);
+
+	status_line("starting httpd server", "success", CONSOLE_SUCCESS);
+#endif
+
+	status_line("USB init", "success", CONSOLE_SUCCESS);
 
 #ifndef NO_NETWORKING
 	/* the drive init above gave DHCP plenty of wall clock time to answer,
