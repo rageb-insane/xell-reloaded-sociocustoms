@@ -88,6 +88,9 @@ void draw_logo()
 	}
 }
 
+/* defined below, next to the rest of the screen helpers */
+static void print_coloured(unsigned int colour, const char *s);
+
 void dumpana() {
 	int i;
 	for (i = 0; i < 0x100; ++i)
@@ -152,6 +155,20 @@ static int network_start(void)
 	return NETWORK_INIT_SUCCESS;
 }
 
+/* libxenon's network_print_config() labels itself " * network config:", the one
+ * line on screen that doesn't match the casing of everything else. Same
+ * information, printed to match. */
+#define IP_OCTETS(ip) (int)(((ip).addr >> 24) & 0xff), (int)(((ip).addr >> 16) & 0xff), \
+		      (int)(((ip).addr >>  8) & 0xff), (int)( (ip).addr        & 0xff)
+
+static void print_network_config(void)
+{
+	printf(" * Network Config: %d.%d.%d.%d / %d.%d.%d.%d / %02X:%02X:%02X:%02X:%02X:%02X\n",
+		IP_OCTETS(netif.ip_addr), IP_OCTETS(netif.netmask),
+		netif.hwaddr[0], netif.hwaddr[1], netif.hwaddr[2],
+		netif.hwaddr[3], netif.hwaddr[4], netif.hwaddr[5]);
+}
+
 static void network_dhcp_poll(void)
 {
 	ip_addr_t ipaddr, netmask, gateway;
@@ -170,9 +187,11 @@ static void network_dhcp_poll(void)
 	if (netif.ip_addr.addr){
 		dhcp_settled = 1;
 		console_clrline();
-		printf(" * dhcp lease acquired\n");
+		printf(" * DHCP ");
+		print_coloured(CONSOLE_SUCCESS, "lease acquired");
+		printf("\n");
 #ifndef NO_PRINT_CONFIG
-		network_print_config();
+		print_network_config();
 #endif
 		return;
 	}
@@ -182,7 +201,9 @@ static void network_dhcp_poll(void)
 
 	dhcp_settled = 1;
 	console_clrline();
-	printf(" * dhcp failed - now assigning a static ip\n");
+	printf(" * DHCP ");
+	print_coloured(CONSOLE_WARN, "failed - assigning a static IP");
+	printf("\n");
 
 	IP4_ADDR(&ipaddr, 192, 168, 1, 99);
 	IP4_ADDR(&gateway, 192, 168, 1, 1);
@@ -190,19 +211,15 @@ static void network_dhcp_poll(void)
 	netif_set_addr(&netif, &ipaddr, &netmask, &gateway);
 	netif_set_up(&netif);
 #ifndef NO_PRINT_CONFIG
-	network_print_config();
+	print_network_config();
 #endif
 }
 #endif
 
 /* libxenon's print_cpu_dvd_keys() draws every line in the one console colour,
- * so XeLL prints these itself instead - same lines, same order, same failure
- * messages, but the cpu key's digits come out green while its label doesn't.
- *
- * kv_get_cserial()/print_cserial() have external linkage in libxenon's
- * xb360.c but never made it into xb360.h, hence the declarations here. */
-extern int kv_get_cserial(unsigned char *serial);
-extern void print_cserial(char *name, unsigned char *data);
+ * so XeLL prints these itself instead - same lines and failure messages, plus
+ * the extra keyvault fields, with the cpu key's digits in green. Everything
+ * here goes through kv_read()/kv_get_key(), both declared in xb360.h. */
 
 /* Die codename per console generation, for the processor line. The console
  * type itself is detected; this table just names the silicon that goes with
@@ -236,6 +253,87 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("   %s... ", label);
 	print_coloured(colour, state);
 	printf("\n");
+}
+
+static const char *av_region_name(int region)
+{
+	switch (region)
+	{
+	case AVREGION_NTSCM: return "NTSC-M";
+	case AVREGION_NTSCJ: return "NTSC-J";
+	case AVREGION_PAL50: return "PAL-50";
+	case AVREGION_PAL60: return "PAL-60";
+	}
+
+	return "Invalid";
+}
+
+static const char *nand_type_name(int meta_type)
+{
+	switch (meta_type)
+	{
+	case META_TYPE_0: return "small block";
+	case META_TYPE_1: return "Jasper 16MB";
+	case META_TYPE_2: return "large block";
+	}
+
+	return "unknown";
+}
+
+/* SMC message 0x07 answers with four sensors. The conventional order is
+ * CPU, GPU, EDRAM, board, each fixed point with degrees in the high byte
+ * and a 1/256 fraction in the low byte. Fixed width, so a redraw always
+ * covers the previous reading exactly. */
+static int temps_row = -1;
+
+static void draw_temperatures(void)
+{
+	static const char *sensorNames[4] = { "CPU", "GPU", "EDRAM", "MB" };
+	uint16_t sensor[4];
+	int i;
+
+	xenon_smc_query_sensors(sensor);
+
+	printf("   Temperatures: ");
+	for (i = 0; i < 4; i++)
+		printf("%s %2d.%01dC  ", sensorNames[i],
+			sensor[i] >> 8, ((sensor[i] & 0xff) * 10) / 256);
+}
+
+static void print_temperatures(void)
+{
+	temps_row = console_get_cursor_y();
+	draw_temperatures();
+	printf("\n");
+}
+
+/* Redraw that line in place so it stays live while XeLL sits at the file
+ * scan. Gives up the moment output nears the bottom of the screen, since a
+ * scroll would shift the line out from under the row we remembered. */
+static void update_temperatures(void)
+{
+	static uint64_t last_update;
+	int x, y;
+
+	if (temps_row < 0)
+		return;
+
+	if (tb_diff_msec(mftb(), last_update) < 2000)
+		return;
+	last_update = mftb();
+
+	y = console_get_cursor_y();
+	if (y >= console_get_cursor_max_y() - 2)
+	{
+		temps_row = -1; /* the screen is scrolling now, stop touching it */
+		return;
+	}
+
+	x = console_get_cursor_x();
+
+	console_set_cursor(0, temps_row);
+	draw_temperatures();
+	console_set_cursor(x, y);
 }
 
 /* Fuses blow four bits at a time, so a loader data version is the number of
@@ -303,41 +401,117 @@ static void print_key_green(char *name, unsigned char *data)
 	printf("\n");
 }
 
+/* Keyvault fields that are plain ascii. kv_get_key() insists the caller's
+ * length already matches the table entry, so len has to be exact. */
+static void print_kv_ascii(const char *label, unsigned char keyid, int len,
+			   unsigned char *kv)
+{
+	unsigned char buf[0x20];
+	int n = len;
+
+	if (len >= (int)sizeof(buf))
+		return;
+
+	memset(buf, '\0', sizeof(buf));
+	if (kv_get_key(keyid, buf, &n, kv) != 0)
+		return;
+
+	printf("%s: %s\n", label, buf);
+}
+
+/* The manufacturing date lives inside the console certificate, past CertSize,
+ * ConsoleId, ConsolePartNumber, Reserved, Privileges and ConsoleType - so
+ * eight ascii digits at cert offset 0x1C. Only printed if it really is
+ * digits, so a wrong offset shows nothing rather than garbage. */
+static void print_mfg_date(unsigned char *kv)
+{
+	unsigned char cert[0x1A8];
+	int n = sizeof(cert);
+	int i;
+
+	if (kv_get_key(XEKEY_CONSOLE_CERTIFICATE, cert, &n, kv) != 0)
+		return;
+
+	for (i = 0; i < 8; i++)
+		if (cert[0x1C + i] < '0' || cert[0x1C + i] > '9')
+			return;
+
+	printf("   * Mfg Date: %c%c%c%c-%c%c-%c%c\n",
+		cert[0x1C], cert[0x1D], cert[0x1E], cert[0x1F],
+		cert[0x20], cert[0x21], cert[0x22], cert[0x23]);
+}
+
 static void print_console_keys(void)
 {
 	unsigned char key[0x10];
-	unsigned char cserial[0xC];
+	unsigned char region[0x02];
+	unsigned char *kv;
+	int n, r;
 
 	printf("\n");
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
-		print_key_green("   * CPU key", key);
+		print_key_green("   * CPU Key", key);
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
-		printf(" ! Unable to read Keyvault data from NAND\n");
-		printf(" ! xenon_logical_nand_data_ok error\n");
+		print_coloured(CONSOLE_ERR, "   ! Unable to read Keyvault data from NAND\n");
+		print_coloured(CONSOLE_ERR, "   ! xenon_logical_nand_data_ok error\n");
+		printf("\n");
+		return;
 	}
-	else if (KV_FLASH_OFFSET == 0 || KV_FLASH_SIZE == 0)
-	{
-		printf(" ! Unable to read Keyvault data from NAND\n");
-		printf(" ! Keyvault size or offset is zero\n");
-	}
-	else
-	{
-		memset(key, '\0', sizeof(key));
-		if (get_virtual_cpukey(key) == 0)
-			print_key("   * Virtual CPU key", key);
 
-		memset(key, '\0', sizeof(key));
-		if (kv_get_dvd_key(key) == 0)
-			print_key("   * DVD key", key);
-
-		memset(cserial, '\0', sizeof(cserial));
-		if (kv_get_cserial(cserial) == 0)
-			print_cserial("   * Serial", cserial);
+	if (KV_FLASH_OFFSET == 0 || KV_FLASH_SIZE == 0)
+	{
+		print_coloured(CONSOLE_ERR, "   ! Unable to read Keyvault data from NAND\n");
+		print_coloured(CONSOLE_ERR, "   ! Keyvault size or offset is zero\n");
+		printf("\n");
+		return;
 	}
+
+	memset(key, '\0', sizeof(key));
+	if (get_virtual_cpukey(key) == 0)
+		print_key("   * Virtual CPU Key", key);
+
+	/* Decrypt the keyvault once and pull every field from the same buffer.
+	 * kv_read() is an RC4 pass plus an HMAC check, and the libxenon helpers
+	 * each do their own, so this is several of those saved. */
+	kv = malloc(KV_FLASH_SIZE);
+	if (kv == NULL)
+	{
+		print_coloured(CONSOLE_ERR, "   ! Out of memory reading the keyvault\n");
+		printf("\n");
+		return;
+	}
+
+	memset(key, '\0', sizeof(key));
+	r = kv_read(kv, 0);
+	if (r == 2 && get_virtual_cpukey(key) == 0)
+		r = kv_read(kv, 1); /* retry against the virtual fuses */
+
+	if (r != 0)
+	{
+		print_coloured(CONSOLE_ERR, "   ! Unable to decrypt the keyvault\n");
+		free(kv);
+		printf("\n");
+		return;
+	}
+
+	memset(key, '\0', sizeof(key));
+	n = sizeof(key);
+	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
+		print_key("   * DVD Key", key);
+
+	print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
+	print_kv_ascii("   * Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
+	print_mfg_date(kv);
+
+	n = sizeof(region);
+	if (kv_get_key(XEKEY_GAME_REGION, region, &n, kv) == 0)
+		printf("   * Game Region: %04X\n", (region[0] << 8) | region[1]);
+
+	free(kv);
 
 	printf("\n");
 }
@@ -423,8 +597,9 @@ int main(){
 	console_clrscr();
 	draw_logo();
 
-	printf("SocioCustoms XeLL " VERSION "\n");
-	printf("Thank you for supporting and choosing me <3 - For Support Message: @socioculture on Discord\n");
+	printf("Thank you for supporting and choosing me <3 - For Support Message: ");
+	print_coloured(CONSOLE_COLOR_PURPLE, "@socioculture");
+	printf(" on Discord\n");
 	printf("Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
 
 	/* build details go to the log and the uart, not the screen */
@@ -458,8 +633,8 @@ int main(){
 
 		if (sfc.initialized != SFCX_INITIALIZED)
 		{
-			printf(" ! sfcx initialization failure\n");
-			printf(" ! nand related features will not be available\n");
+			print_coloured(CONSOLE_ERR, " ! sfcx initialization failure\n");
+			print_coloured(CONSOLE_ERR, " ! nand related features will not be available\n");
 			delay(5);
 		}
 	}
@@ -490,13 +665,15 @@ int main(){
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
 	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
 	 * what would tell them apart. */
-	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x\n\n",
+	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x\n",
 			 xenon_get_XenosID(),
 			 xenon_get_PCIBridgeRevisionID(),
 			 xenon_get_DVE());
 
+	printf("AV Region: %s\n\n", av_region_name(xenon_config_get_avregion()));
+
 #ifndef NO_PRINT_CONFIG
-	printf("FUSES - write them down and keep them safe:\n");
+	printf("Fuses - Write Them Down and Keep Them Safe:\n");
 	u64 fuseline[12];
 	char *fusestr = FUSES;
 	for (i=0; i<12; ++i){
@@ -522,10 +699,10 @@ int main(){
 			(unsigned int)(fuseline[i+6]&0xffffffff));
 	}
 
-	print_console_keys();
-
-	printf("   * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
+	printf("\n   * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
 	printf("   * CF/CG LDV: %d\n", fuse_ldv(fuseline, 7, 11));
+
+	print_console_keys();
 #endif
 
 	/* Bring the drivers up with the screen hook off - all of it, lwip, the
@@ -563,7 +740,14 @@ int main(){
 
 	/* Read from the host bridge register HWINIT fills in, so this reflects
 	 * what's actually installed rather than assuming the stock 512MB. */
-	printf("\n   Memory Size :  %uK\n\n", xenon_get_ram_size() / 1024);
+	printf("\n   Memory Size:  %uK\n", xenon_get_ram_size() / 1024);
+
+	if (sfc.initialized == SFCX_INITIALIZED)
+		printf("   NAND Size:  %dMB (%s)\n",
+			sfc.size_mb, nand_type_name(sfc.meta_type));
+
+	print_temperatures();
+	printf("\n");
 
 	detect_line("Primary Master   ", ataPresent, &ata);
 	detect_line("Secondary Master ", atapiPresent, &atapi);
@@ -579,19 +763,19 @@ int main(){
 		status_line("NAND init", "failed", CONSOLE_ERR);
 		break;
 	default:
-		status_line("NAND init", "mmc console, skipped", CONSOLE_WARN);
+		status_line("NAND init", "MMC console, skipped", CONSOLE_WARN);
 		break;
 	}
 
 #ifndef NO_NETWORKING
 	if (netif.ip_addr.addr)
-		status_line("Network init", "dhcp lease acquired", CONSOLE_SUCCESS);
+		status_line("Network init", "DHCP lease acquired", CONSOLE_SUCCESS);
 	else if (netStatus == NETWORK_INIT_SUCCESS)
-		status_line("Network init", "dhcp requested", CONSOLE_WARN);
+		status_line("Network init", "DHCP requested", CONSOLE_WARN);
 	else
 		status_line("Network init", "failed", CONSOLE_ERR);
 
-	status_line("starting httpd server", "success", CONSOLE_SUCCESS);
+	status_line("HTTPD init", "success", CONSOLE_SUCCESS);
 #endif
 
 	status_line("USB init", "success", CONSOLE_SUCCESS);
@@ -638,6 +822,9 @@ int main(){
 			network_poll();
 			network_dhcp_poll();
 		#endif
+
+		// keep the temperature readout live while we sit here
+		update_temperatures();
 
 		#ifndef NO_TFTP
 			// No point talking to a tftp server before we have an address
