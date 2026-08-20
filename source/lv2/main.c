@@ -65,7 +65,9 @@ static const char *consoleNames[] =
  * tile blocks, but console_pset() can only address from offset_y down - so
  * anything a scroll drags above that margin can't be wiped. Starting a full
  * tile block down means a scrolled copy still lands at y >= 0 where the wipe
- * can reach it, instead of stranding a sliver at the top of the screen. */
+ * can reach it, instead of stranding a sliver at the top of the screen.
+ *
+ * That is the whole reason for the gap above the logo. Don't lower it. */
 #define LOGO_TOP    32	/* pixels down from the top */
 
 /* Right edge of the panel, in console_pset() coordinates. Deliberately not
@@ -825,7 +827,10 @@ int main(){
 	draw_logo();
 	draw_discord();
 
-	printf("Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
+	/* The git rev is the only thing that tells you which build actually
+	 * booted, which matters when reflashing repeatedly. RELEASE carries the
+	 * Makefile's quoting when the repo has no tags, so use GITREV directly. */
+	printf("XeLL git-" GITREV " - Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
 
 	/* build details go to the log and the uart, not the screen */
 	console_close();
@@ -924,8 +929,8 @@ int main(){
 			(unsigned int)(fuseline[i+6]&0xffffffff));
 	}
 
-	printf("\n   * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
-	printf("   * CF/CG LDV: %d\n", fuse_ldv(fuseline, 7, 11));
+	printf("\n   * LDV: CB %d / CF-CG %d\n",
+		fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
 	print_console_keys();
 #endif
@@ -965,11 +970,13 @@ int main(){
 
 	/* Read from the host bridge register HWINIT fills in, so this reflects
 	 * what's actually installed rather than assuming the stock 512MB. */
-	printf("\n   Memory Size:  %uK\n", xenon_get_ram_size() / 1024);
+	printf("\n   Memory: %uK", xenon_get_ram_size() / 1024);
 
 	if (sfc.initialized == SFCX_INITIALIZED)
-		printf("   NAND Size:  %dMB (%s)\n",
+		printf("   NAND: %dMB (%s)",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
+
+	printf("\n");
 
 	draw_temperatures(); /* drawn under the logo, not inline */
 	printf("\n");
