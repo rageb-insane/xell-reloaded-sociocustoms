@@ -60,7 +60,13 @@ static const char *consoleNames[] =
  * the framebuffer's 32x32 tile swizzle for us, and the _right variant counts
  * x inward from the right edge of the safe area. */
 #define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
-#define LOGO_TOP    16	/* pixels down from the top */
+
+/* console_scroll32() shifts the whole framebuffer from row 0, in 32 pixel
+ * tile blocks, but console_pset() can only address from offset_y down - so
+ * anything a scroll drags above that margin can't be wiped. Starting a full
+ * tile block down means a scrolled copy still lands at y >= 0 where the wipe
+ * can reach it, instead of stranding a sliver at the top of the screen. */
+#define LOGO_TOP    32	/* pixels down from the top */
 
 /* Right edge of the panel, in console_pset() coordinates. Deliberately not
  * console_pset_right(): that measures from pixel_max_x while text measures
@@ -70,6 +76,16 @@ static const char *consoleNames[] =
 static int panel_right(void)
 {
 	return console_get_cursor_max_x() * 8 - LOGO_MARGIN;
+}
+
+/* Column at which a field of len characters sits centred under the logo.
+ * Text lands on 8 pixel boundaries so it can be a few pixels off dead
+ * centre, which is invisible at this size. */
+static int panel_col(int len)
+{
+	int left = panel_right() - LOGO_WIDTH;
+
+	return (left + (LOGO_WIDTH - len * 8) / 2) / 8;
 }
 
 /* Alpha-blend one mask pixel of a solid colour over the background. */
@@ -109,10 +125,10 @@ void draw_logo()
  * LOGO_TOP + LOGO_HEIGHT, so row 8 (pixels 128+) is the first text row clear
  * of it. TEMPS_WIDTH covers "EDRAM 40.0C" plus a column of slack. */
 #define DISCORD_TEXT "@socioculture"
-#define DISCORD_ROW  8
-#define TEMPS_ROW    10
+#define DISCORD_ROW  9
+#define TEMPS_ROW    11
 #define TEMPS_LINES  4
-#define TEMPS_WIDTH  12
+#define TEMPS_WIDTH  11
 
 /* The band the panel owns, in pixels from the top. */
 #define LOGO_BAND_H ((TEMPS_ROW + TEMPS_LINES) * 16)
@@ -422,7 +438,11 @@ static const char *nand_type_name(int meta_type)
 
 static void draw_discord(void)
 {
-	int col = console_get_cursor_max_x() - (int)strlen(DISCORD_TEXT);
+	int len = (int)strlen(DISCORD_TEXT);
+	int left = panel_right() - LOGO_WIDTH;
+	int combo = DISCORD_WIDTH + DISCORD_GAP + len * 8;
+	/* centre the mark and handle together, then hang the mark off the text */
+	int col = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
 	int iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
 	int icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
 	int x = console_get_cursor_x();
@@ -453,7 +473,7 @@ static void draw_temperatures(void)
 {
 	static const char *sensorNames[4] = { "CPU", "GPU", "EDRAM", "MB" };
 	uint16_t sensor[4];
-	int col = console_get_cursor_max_x() - TEMPS_WIDTH;
+	int col = panel_col(TEMPS_WIDTH);
 	int x = console_get_cursor_x();
 	int y = console_get_cursor_y();
 	int i;
@@ -558,15 +578,9 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	if (len >= (int)sizeof(buf))
 		return;
 
-	printf("%s: ", label);
-
 	memset(buf, '\0', sizeof(buf));
 	if (kv_get_key(keyid, buf, &n, kv) != 0)
-	{
-		print_coloured(COLOUR_DIM, "unreadable");
-		printf("\n");
 		return;
-	}
 
 	/* These are fixed length fields, not necessarily terminated, and a blank
 	 * one is padded with nulls or spaces rather than being absent. Build a
@@ -578,12 +592,19 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	for (i = len - 1; i >= 0 && out[i] == ' '; i--)
 		out[i] = '\0';
 
+	/* A serial is plain alphanumerics. Blank fields, padding, and the junk
+	 * some consoles carry here are all worth nothing on screen, so drop the
+	 * whole line rather than printing a placeholder. */
 	if (out[0] == '\0')
-		print_coloured(COLOUR_DIM, "not set");
-	else
-		printf("%s", out);
+		return;
 
-	printf("\n");
+	for (i = 0; out[i]; i++)
+		if (!((out[i] >= '0' && out[i] <= '9') ||
+		      (out[i] >= 'A' && out[i] <= 'Z') ||
+		      (out[i] >= 'a' && out[i] <= 'z')))
+			return;
+
+	printf("%s: %s\n", label, out);
 }
 
 /* The manufacturing date lives inside the console certificate, past CertSize,
@@ -838,7 +859,7 @@ int main(){
 	printf("AV Region: %s\n\n", av_region_name(xenon_config_get_avregion()));
 
 #ifndef NO_PRINT_CONFIG
-	printf("Fuses - Write Them Down and Keep Them Safe:\n");
+	printf("Fuses:\n");
 	u64 fuseline[12];
 	char *fusestr = FUSES;
 	for (i=0; i<12; ++i){
