@@ -58,7 +58,7 @@ static const char *consoleNames[] =
  * background happens to be rather than assuming black. console_pset() does
  * the framebuffer's 32x32 tile swizzle for us, and the _right variant counts
  * x inward from the right edge of the safe area. */
-#define LOGO_MARGIN 16	/* pixels clear of the right edge */
+#define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
 #define LOGO_TOP    16	/* pixels down from the top */
 
 void draw_logo()
@@ -217,8 +217,8 @@ static const char *cpuNames[] =
 	"Vejle",	/* Trinity       - 45nm XCGPU */
 	"Vejle",	/* Corona        - 45nm XCGPU */
 	"Vejle",	/* Corona MMC    - 45nm XCGPU */
-	"Vejle",	/* Winchester    - 45nm XCGPU */
-	"Vejle",	/* Winchester MMC- 45nm XCGPU */
+	"Oban",		/* Winchester    - later XCGPU */
+	"Oban",		/* Winchester MMC- later XCGPU */
 };
 
 /* Print s in colour, then put the console back how we found it. */
@@ -312,7 +312,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
-		print_key_green(" * CPU key", key);
+		print_key_green("   * CPU key", key);
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -328,15 +328,15 @@ static void print_console_keys(void)
 	{
 		memset(key, '\0', sizeof(key));
 		if (get_virtual_cpukey(key) == 0)
-			print_key(" * Virtual CPU key", key);
+			print_key("   * Virtual CPU key", key);
 
 		memset(key, '\0', sizeof(key));
 		if (kv_get_dvd_key(key) == 0)
-			print_key(" * DVD key", key);
+			print_key("   * DVD key", key);
 
 		memset(cserial, '\0', sizeof(cserial));
 		if (kv_get_cserial(cserial) == 0)
-			print_cserial(" * Serial", cserial);
+			print_cserial("   * Serial", cserial);
 	}
 
 	printf("\n");
@@ -424,6 +424,7 @@ int main(){
 	draw_logo();
 
 	printf("SocioCustoms XeLL " VERSION "\n");
+	printf("Thank you for supporting and choosing me <3 - For Support Message: @socioculture on Discord\n");
 	printf("Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
 
 	/* build details go to the log and the uart, not the screen */
@@ -472,12 +473,30 @@ int main(){
 	/* display some cpu info */
 	consoleType = xenon_get_console_type();
 
-	printf("\n * Console Type: %s (PVR %08x)\n\n",
-			 (consoleType >= 0 && consoleType <= 7) ? consoleNames[consoleType] : "Unknown",
+	/* There's no register that reports the core clock, so take it from
+	 * libxenon's own timebase constant (the timebase runs at core/64) rather
+	 * than hardcoding a number here. */
+	printf("\nMicrosoft %s %08x %u.%03uGHz Processor\n",
+			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
+			 mfspr(287),
+			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
+			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
+
+	printf("Console Type: %s (PVR %08x)\n",
+			 (consoleType >= 0 && consoleType <= 8) ? consoleNames[consoleType] : "Unknown",
 			 mfspr(287));
 
+	/* The three IDs libxenon narrows the board down with. Board revisions that
+	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
+	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
+	 * what would tell them apart. */
+	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x\n\n",
+			 xenon_get_XenosID(),
+			 xenon_get_PCIBridgeRevisionID(),
+			 xenon_get_DVE());
+
 #ifndef NO_PRINT_CONFIG
-	printf(" * FUSES - write them down and keep them safe:\n");
+	printf("FUSES - write them down and keep them safe:\n");
 	u64 fuseline[12];
 	char *fusestr = FUSES;
 	for (i=0; i<12; ++i){
@@ -494,7 +513,7 @@ int main(){
 
 	/* on screen they go two columns wide, 0-5 on the left, 6-11 on the right */
 	for (i=0; i<6; ++i){
-		printf("   fuseset %02d: %08x%08x     fuseset %02d: %08x%08x\n",
+		printf("   %02d: %08x%08x     %02d: %08x%08x\n",
 			i,
 			(unsigned int)(fuseline[i]>>32),
 			(unsigned int)(fuseline[i]&0xffffffff),
@@ -505,8 +524,8 @@ int main(){
 
 	print_console_keys();
 
-	printf(" * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
-	printf(" * CF/CG LDV: %d\n", fuse_ldv(fuseline, 7, 11));
+	printf("   * CB LDV: %d\n", fuse_ldv(fuseline, 2, 2));
+	printf("   * CF/CG LDV: %d\n", fuse_ldv(fuseline, 7, 11));
 #endif
 
 	/* Bring the drivers up with the screen hook off - all of it, lwip, the
@@ -542,15 +561,9 @@ int main(){
 	/* back on screen for the dhcp result and the file scan */
 	console_open();
 
-	/* What the hardware turned out to be. There's no register that reports the
-	 * core clock, so take it from libxenon's own timebase constant (the
-	 * timebase runs at core/64) rather than hardcoding a number here. */
-	printf("\n   Microsoft %s %08x %u.%03uGHz Processor\n",
-		 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
-		 mfspr(287),
-		 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
-		 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
-	printf("   Memory Test :  %uK OK\n\n", xenon_get_ram_size() / 1024);
+	/* Read from the host bridge register HWINIT fills in, so this reflects
+	 * what's actually installed rather than assuming the stock 512MB. */
+	printf("\n   Memory Size :  %uK\n\n", xenon_get_ram_size() / 1024);
 
 	detect_line("Primary Master   ", ataPresent, &ata);
 	detect_line("Secondary Master ", atapiPresent, &atapi);
