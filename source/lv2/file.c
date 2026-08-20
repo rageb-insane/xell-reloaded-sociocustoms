@@ -60,34 +60,34 @@ int launch_file(void *addr, unsigned len, int filetype) {
     gzip_file = (unsigned char *)addr;
     if ((gzip_file[0] == 0x1F) && (gzip_file[1] == 0x8B)) {
       // found a gzip file
-      printf(" * Found a gzip file, unpacking...\n");
+      printf("Found a gzip file, unpacking...\n");
       char *dest = malloc(ELF_MAXSIZE);
       long unsigned int destsize = ELF_MAXSIZE;
       int err = puff((unsigned char *)dest, &destsize, &gzip_file[GZIP_HEADER_SIZE], (long unsigned int *)&len);
       if (err == 0) {
         // relocate elf ...
         memcpy(addr, dest, destsize);
-        printf(" * Successfully unpacked %li bytes...\n", destsize);
+        PRINT_COL(console_color[0], CONSOLE_SUCCESS, "Unpacked %li bytes\n", destsize);
         free(dest);
         len = destsize;
       } else {
-        printf(" * Unpacking failed with error %i...\n", err);
+        PRINT_COL(console_color[0], CONSOLE_ERR, "Unpacking failed with error %i\n", err);
         free(dest);
         return -1;
       }
     }
     if (memcmp(addr, elfhdr, 4))
       return -1;
-    printf(" * Launching ELF...\n");
+    PRINT_COL(console_color[0], CONSOLE_SUCCESS, "Launching ELF...\n");
     ret = elf_runWithDeviceTree(addr, len, dt_blob_start,
                                 dt_blob_end - dt_blob_start);
     break;
   case TYPE_INITRD:
-    printf(" * Loading initrd into memory ...\n");
+    printf("Loading initrd into memory...\n");
     ret = kernel_prepare_initrd(addr, len);
     break;
   case TYPE_KBOOT:
-    printf(" * Loading kboot.conf ...\n");
+    printf("Loading kboot.conf...\n");
     ret = try_kbootconf(addr, len);
     break;
   // This shit is broken!
@@ -98,20 +98,40 @@ int launch_file(void *addr, unsigned len, int filetype) {
   //         ret = updateXeLL(addr,len);
   //         break;
   default:
-    printf("! Unsupported filetype supplied!\n");
+    PRINT_COL(console_color[0], CONSOLE_ERR, "Unsupported filetype supplied\n");
   }
   return ret;
 }
 
 int try_load_file(char *filename, int filetype) {
   int ret;
+  /* The flashing itself is libxenon's, and none of its output gets muted - a
+   * bad NAND write has to stay visible, countdown and all. What we can do is
+   * set the console colour around the call, so the whole sequence comes out
+   * in warning colour and it's obvious the NAND is being written. */
   if (filetype == TYPE_NANDIMAGE) {
+    unsigned int bg = console_color[0], fg = console_color[1];
+
+    wait_and_cleanup_line();
+    PRINT_COL(bg, CONSOLE_ERR, "\nNAND Image Found: %s\n", filename);
+
+    console_set_colors(bg, CONSOLE_WARN);
     try_rawflash(filename);
+    console_set_colors(bg, fg);
+
     return -1;
   }
 
   if (filetype == TYPE_UPDXELL) {
+    unsigned int bg = console_color[0], fg = console_color[1];
+
+    wait_and_cleanup_line();
+    PRINT_COL(bg, CONSOLE_ERR, "\nXeLL Update Found: %s\n", filename);
+
+    console_set_colors(bg, CONSOLE_WARN);
     updateXeLL(filename);
+    console_set_colors(bg, fg);
+
     return -1;
   }
 
@@ -134,7 +154,7 @@ int try_load_file(char *filename, int filetype) {
 
   void *buf = malloc(size);
 
-  printf("\n * '%s' found, loading %ld...\n", filename, size);
+  printf("\nFound %s - loading %ld bytes...\n", filename, size);
   int r = fread(buf, 1, size, f);
   if (r != size) {
     fclose(f);

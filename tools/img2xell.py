@@ -47,6 +47,16 @@ def emit(path, src, name, w, h, arrayname, data, extra=""):
 def alpha_mask(args):
     img = Image.open(args.image).convert("RGBA")
 
+    # Icons usually arrive centred in a big transparent square. Storing that
+    # padding wastes space and makes the on-screen size unpredictable.
+    box = img.getchannel("A").getbbox()
+    if box:
+        img = img.crop(box)
+
+    if args.max_height and img.height > args.max_height:
+        w = round(img.width * args.max_height / img.height)
+        img = img.resize((w, args.max_height), Image.LANCZOS)
+
     if args.max_width and img.width > args.max_width:
         h = round(img.height * args.max_width / img.width)
         img = img.resize((args.max_width, h), Image.LANCZOS)
@@ -66,6 +76,9 @@ def main():
     ap.add_argument("--name", default="logo", help="C identifier prefix")
     ap.add_argument("--max-width", type=int, default=0,
                     help="scale down so width <= this, keeping aspect")
+    ap.add_argument("--max-height", type=int, default=0,
+                    help="scale down so height <= this, keeping aspect. Handy "
+                         "for icons that must fit one 16px text row.")
     ap.add_argument("--key", default="",
                     help="transparent colour as RRGGBB; those pixels are skipped")
     ap.add_argument("--alpha-mask", action="store_true",

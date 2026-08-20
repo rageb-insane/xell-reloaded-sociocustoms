@@ -32,6 +32,7 @@
 
 #include "config.h"
 #include "file.h"
+#include "discord.h"
 #include "logo.h"
 
 #ifndef NO_TFTP
@@ -61,12 +62,33 @@ static const char *consoleNames[] =
 #define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
 #define LOGO_TOP    16	/* pixels down from the top */
 
-void draw_logo()
+/* Right edge of the panel, in console_pset() coordinates. Deliberately not
+ * console_pset_right(): that measures from pixel_max_x while text measures
+ * from offset_x, and the two differ by the overscan margin - which would
+ * leave the text sticking out past the logo by ~8 columns at 1080p. Text
+ * column C starts at pixel C*8 in this system, so both line up exactly. */
+static int panel_right(void)
+{
+	return console_get_cursor_max_x() * 8 - LOGO_MARGIN;
+}
+
+/* Alpha-blend one mask pixel of a solid colour over the background. */
+static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 {
 	unsigned int bg = console_color[0];
-	unsigned int r0 = (bg >>  8) & 0xff;
-	unsigned int g0 = (bg >> 16) & 0xff;
-	unsigned int b0 = (bg >> 24) & 0xff;
+	int r0 = (bg >>  8) & 0xff;
+	int g0 = (bg >> 16) & 0xff;
+	int b0 = (bg >> 24) & 0xff;
+
+	console_pset(x, y,
+		     r0 + (r - r0) * (int)a / 255,
+		     g0 + (g - g0) * (int)a / 255,
+		     b0 + (b - b0) * (int)a / 255);
+}
+
+void draw_logo()
+{
+	int left = panel_right() - LOGO_WIDTH;
 	unsigned int x, y;
 
 	for (y = 0; y < LOGO_HEIGHT; y++)
@@ -78,18 +100,117 @@ void draw_logo()
 			if (!a)
 				continue; /* fully transparent, leave the background */
 
-			/* white foreground, alpha-blended over the background */
-			console_pset_right(LOGO_MARGIN + (LOGO_WIDTH - 1 - x),
-					   LOGO_TOP + y,
-					   r0 + (255 - r0) * a / 255,
-					   g0 + (255 - g0) * a / 255,
-					   b0 + (255 - b0) * a / 255);
+			blend_pset(left + x, LOGO_TOP + y, a, 255, 255, 255);
 		}
 	}
 }
 
+/* Right hand panel, stacked under the logo. The logo's last pixel row is
+ * LOGO_TOP + LOGO_HEIGHT, so row 8 (pixels 128+) is the first text row clear
+ * of it. TEMPS_WIDTH covers "EDRAM 40.0C" plus a column of slack. */
+#define DISCORD_TEXT "@socioculture"
+#define DISCORD_ROW  8
+#define TEMPS_ROW    10
+#define TEMPS_LINES  4
+#define TEMPS_WIDTH  12
+
+/* The band the panel owns, in pixels from the top. */
+#define LOGO_BAND_H ((TEMPS_ROW + TEMPS_LINES) * 16)
+
+static void draw_discord(void);
+static void draw_temperatures(void);
+
+/* Set once the console has scrolled, after which any row we memorised points
+ * at something else and must not be written to. */
+static int screen_scrolled;
+
+/* The console scrolls the whole framebuffer, logo included, so once output
+ * reaches the bottom the logo would crawl off the top. Wipe the band it lives
+ * in - which also clears whatever a scroll dragged up above it - and draw it
+ * again at home. Nothing else uses these columns, so the wipe is safe. */
+static void redraw_logo(void)
+{
+	unsigned int bg = console_color[0];
+	unsigned int r0 = (bg >>  8) & 0xff;
+	unsigned int g0 = (bg >> 16) & 0xff;
+	unsigned int b0 = (bg >> 24) & 0xff;
+	int left = panel_right() - LOGO_WIDTH;
+	unsigned int x, y;
+
+	for (y = 0; y < LOGO_BAND_H; y++)
+		for (x = 0; x < LOGO_WIDTH; x++)
+			console_pset(left + x, y, r0, g0, b0);
+
+	draw_logo();
+	draw_discord();
+	draw_temperatures();
+}
+
+/* Called every pass of the main loop. A cursor that moved up means
+ * console_scroll32() ran; near the bottom of the screen any movement at all
+ * means scrolling is in progress. Idle screens redraw nothing, so there's no
+ * flicker while XeLL is just sitting there. */
+static void keep_logo_in_place(void)
+{
+	static int last_y = -1;
+	int max_y = console_get_cursor_max_y();
+	int y = console_get_cursor_y();
+
+	if (last_y >= 0 && y < last_y)
+		screen_scrolled = 1; /* memorised rows are meaningless from here */
+
+	if (last_y >= 0 && y != last_y && (y < last_y || y >= max_y - 3))
+		redraw_logo();
+
+	last_y = y;
+}
+
 /* defined below, next to the rest of the screen helpers */
 static void print_coloured(unsigned int colour, const char *s);
+
+/* The "Network init" line is printed while DHCP is still in flight, so it
+ * would otherwise sit at "requested" forever. Remember its row and rewrite it
+ * once we know the outcome. Padded, so a shorter result can't leave the tail
+ * of the longer one behind. */
+static int netstatus_row = -1;
+
+static void set_network_status(const char *state, unsigned int colour)
+{
+	int x, y, i;
+
+	if (netstatus_row < 0 || screen_scrolled)
+		return;
+
+	x = console_get_cursor_x();
+	y = console_get_cursor_y();
+
+	console_set_cursor(0, netstatus_row);
+	printf("   Network init... ");
+	print_coloured(colour, state);
+	for (i = strlen(state); i < 32; i++)
+		printf(" ");
+
+	console_set_cursor(x, y);
+	netstatus_row = -1; /* reported, nothing more to say */
+}
+
+/* Printed once, after DHCP has settled, so it sits below the network config
+ * instead of above it. Scanning starts as soon as the main loop does either
+ * way - this is just the banner. */
+static void announce_scan(void)
+{
+	static int announced;
+
+	if (announced)
+		return;
+	announced = 1;
+
+#ifndef NO_TFTP
+	printf("\nLooking for files on TFTP and local media...\n\n");
+#else
+	printf("\nLooking for files on local media...\n\n");
+#endif
+}
 
 void dumpana() {
 	int i;
@@ -163,7 +284,7 @@ static int network_start(void)
 
 static void print_network_config(void)
 {
-	printf(" * Network Config: %d.%d.%d.%d / %d.%d.%d.%d / %02X:%02X:%02X:%02X:%02X:%02X\n",
+	printf("Network Config: %d.%d.%d.%d / %d.%d.%d.%d / %02X:%02X:%02X:%02X:%02X:%02X\n",
 		IP_OCTETS(netif.ip_addr), IP_OCTETS(netif.netmask),
 		netif.hwaddr[0], netif.hwaddr[1], netif.hwaddr[2],
 		netif.hwaddr[3], netif.hwaddr[4], netif.hwaddr[5]);
@@ -187,9 +308,7 @@ static void network_dhcp_poll(void)
 	if (netif.ip_addr.addr){
 		dhcp_settled = 1;
 		console_clrline();
-		printf(" * DHCP ");
-		print_coloured(CONSOLE_SUCCESS, "lease acquired");
-		printf("\n");
+		set_network_status("DHCP lease acquired", CONSOLE_SUCCESS);
 #ifndef NO_PRINT_CONFIG
 		print_network_config();
 #endif
@@ -201,9 +320,7 @@ static void network_dhcp_poll(void)
 
 	dhcp_settled = 1;
 	console_clrline();
-	printf(" * DHCP ");
-	print_coloured(CONSOLE_WARN, "failed - assigning a static IP");
-	printf("\n");
+	set_network_status("no DHCP, static IP assigned", CONSOLE_WARN);
 
 	IP4_ADDR(&ipaddr, 192, 168, 1, 99);
 	IP4_ADDR(&gateway, 192, 168, 1, 1);
@@ -237,6 +354,11 @@ static const char *cpuNames[] =
 	"Oban",		/* Winchester    - later XCGPU */
 	"Oban",		/* Winchester MMC- later XCGPU */
 };
+
+/* CONSOLE_COLOR_GREY is RGB(192,192,192) - against white text on black that
+ * reads as white. This is dim enough to actually look absent. Packed the way
+ * console_set_colors() wants it: (b<<24)|(g<<16)|(r<<8). */
+#define COLOUR_DIM 0x70707000	/* RGB(112,112,112) */
 
 /* Print s in colour, then put the console back how we found it. */
 static void print_coloured(unsigned int colour, const char *s)
@@ -282,58 +404,81 @@ static const char *nand_type_name(int meta_type)
 
 /* SMC message 0x07 answers with four sensors. The conventional order is
  * CPU, GPU, EDRAM, board, each fixed point with degrees in the high byte
- * and a 1/256 fraction in the low byte. Fixed width, so a redraw always
- * covers the previous reading exactly. */
-static int temps_row = -1;
+ * and a 1/256 fraction in the low byte.
+ *
+ * These live directly under the logo, stacked one per line and right aligned
+ * with it, rather than inline with the boot text. That means they sit at a
+ * fixed spot on screen instead of on a row the console can scroll away, so
+ * they keep updating no matter how much text goes past. Fixed width, so each
+ * redraw covers the previous reading exactly. */
+/* Sits directly under the logo, above the temperatures. The mark is a solid
+ * shape stored as an alpha mask like the logo, tinted to the same purple as
+ * the handle beside it, and nudged down so its 14 rows centre in the 16 pixel
+ * text row. */
+#define PURPLE_R ((CONSOLE_COLOR_PURPLE >>  8) & 0xff)
+#define PURPLE_G ((CONSOLE_COLOR_PURPLE >> 16) & 0xff)
+#define PURPLE_B ((CONSOLE_COLOR_PURPLE >> 24) & 0xff)
+#define DISCORD_GAP 4	/* pixels between the mark and the handle */
+
+static void draw_discord(void)
+{
+	int col = console_get_cursor_max_x() - (int)strlen(DISCORD_TEXT);
+	int iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
+	int icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
+	int x = console_get_cursor_x();
+	int y = console_get_cursor_y();
+	unsigned int ix, iy;
+
+	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
+	{
+		for (ix = 0; ix < DISCORD_WIDTH; ix++)
+		{
+			unsigned int a = discord_alpha[iy * DISCORD_WIDTH + ix];
+
+			if (!a)
+				continue;
+
+			blend_pset(iconx + ix, icony + iy, a,
+				   PURPLE_R, PURPLE_G, PURPLE_B);
+		}
+	}
+
+	console_set_cursor(col, DISCORD_ROW);
+	print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
+
+	console_set_cursor(x, y);
+}
 
 static void draw_temperatures(void)
 {
 	static const char *sensorNames[4] = { "CPU", "GPU", "EDRAM", "MB" };
 	uint16_t sensor[4];
+	int col = console_get_cursor_max_x() - TEMPS_WIDTH;
+	int x = console_get_cursor_x();
+	int y = console_get_cursor_y();
 	int i;
 
 	xenon_smc_query_sensors(sensor);
 
-	printf("   Temperatures: ");
-	for (i = 0; i < 4; i++)
-		printf("%s %2d.%01dC  ", sensorNames[i],
+	for (i = 0; i < TEMPS_LINES; i++)
+	{
+		console_set_cursor(col, TEMPS_ROW + i);
+		printf("%-5s %2d.%01dC", sensorNames[i],
 			sensor[i] >> 8, ((sensor[i] & 0xff) * 10) / 256);
+	}
+
+	console_set_cursor(x, y);
 }
 
-static void print_temperatures(void)
-{
-	temps_row = console_get_cursor_y();
-	draw_temperatures();
-	printf("\n");
-}
-
-/* Redraw that line in place so it stays live while XeLL sits at the file
- * scan. Gives up the moment output nears the bottom of the screen, since a
- * scroll would shift the line out from under the row we remembered. */
 static void update_temperatures(void)
 {
 	static uint64_t last_update;
-	int x, y;
-
-	if (temps_row < 0)
-		return;
 
 	if (tb_diff_msec(mftb(), last_update) < 2000)
 		return;
 	last_update = mftb();
 
-	y = console_get_cursor_y();
-	if (y >= console_get_cursor_max_y() - 2)
-	{
-		temps_row = -1; /* the screen is scrolling now, stop touching it */
-		return;
-	}
-
-	x = console_get_cursor_x();
-
-	console_set_cursor(0, temps_row);
 	draw_temperatures();
-	console_set_cursor(x, y);
 }
 
 /* Fuses blow four bits at a time, so a loader data version is the number of
@@ -375,13 +520,13 @@ static const char *ata_model(struct xenon_ata_device *dev)
 
 static void detect_line(const char *label, int present, struct xenon_ata_device *dev)
 {
-	printf("   Detecting %s... ", label);
+	printf("   %s... ", label);
 
 	if (present)
 		printf("%s\n", ata_model(dev));
 	else
 	{
-		print_coloured(CONSOLE_COLOR_GREY, "None");
+		print_coloured(COLOUR_DIM, "None");
 		printf("\n");
 	}
 }
@@ -407,16 +552,38 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 			   unsigned char *kv)
 {
 	unsigned char buf[0x20];
-	int n = len;
+	char out[0x21];
+	int n = len, i;
 
 	if (len >= (int)sizeof(buf))
 		return;
 
+	printf("%s: ", label);
+
 	memset(buf, '\0', sizeof(buf));
 	if (kv_get_key(keyid, buf, &n, kv) != 0)
+	{
+		print_coloured(COLOUR_DIM, "unreadable");
+		printf("\n");
 		return;
+	}
 
-	printf("%s: %s\n", label, buf);
+	/* These are fixed length fields, not necessarily terminated, and a blank
+	 * one is padded with nulls or spaces rather than being absent. Build a
+	 * printable copy instead of trusting %s to stop somewhere sensible. */
+	for (i = 0; i < len; i++)
+		out[i] = (buf[i] >= 0x20 && buf[i] < 0x7f) ? (char)buf[i] : ' ';
+	out[len] = '\0';
+
+	for (i = len - 1; i >= 0 && out[i] == ' '; i--)
+		out[i] = '\0';
+
+	if (out[0] == '\0')
+		print_coloured(COLOUR_DIM, "not set");
+	else
+		printf("%s", out);
+
+	printf("\n");
 }
 
 /* The manufacturing date lives inside the console certificate, past CertSize,
@@ -596,10 +763,8 @@ int main(){
 	 * puts the cursor back to 0,0, so the splash starts at the top. */
 	console_clrscr();
 	draw_logo();
+	draw_discord();
 
-	printf("Thank you for supporting and choosing me <3 - For Support Message: ");
-	print_coloured(CONSOLE_COLOR_PURPLE, "@socioculture");
-	printf(" on Discord\n");
 	printf("Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
 
 	/* build details go to the log and the uart, not the screen */
@@ -746,11 +911,11 @@ int main(){
 		printf("   NAND Size:  %dMB (%s)\n",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
 
-	print_temperatures();
+	draw_temperatures(); /* drawn under the logo, not inline */
 	printf("\n");
 
-	detect_line("Primary Master   ", ataPresent, &ata);
-	detect_line("Secondary Master ", atapiPresent, &atapi);
+	detect_line("HDD       ", ataPresent, &ata);
+	detect_line("Disc Drive", atapiPresent, &atapi);
 
 	/* how the bring-up went */
 	printf("\n");
@@ -768,6 +933,9 @@ int main(){
 	}
 
 #ifndef NO_NETWORKING
+	/* remembered so set_network_status() can rewrite it when DHCP settles */
+	netstatus_row = console_get_cursor_y();
+
 	if (netif.ip_addr.addr)
 		status_line("Network init", "DHCP lease acquired", CONSOLE_SUCCESS);
 	else if (netStatus == NETWORK_INIT_SUCCESS)
@@ -808,10 +976,6 @@ int main(){
 	// Set the fallback TFTP address
 	ip_addr_t tftp_fallback_address;
 	ip4_addr_set_u32(&tftp_fallback_address, 0xC0A8015A); // 192.168.1.90
-
-	printf("\n * Looking for files on TFTP and local media...\n\n");
-#else
-	printf("\n * Looking for files on local media...\n\n");
 #endif
 
 	for(;;){
@@ -821,10 +985,20 @@ int main(){
 			// handshake network_start() kicked off without blocking.
 			network_poll();
 			network_dhcp_poll();
+
+			// Held back until DHCP has resolved one way or the other, so
+			// this lands under the network config rather than above it.
+			// The scan itself has been running since the loop started.
+			if (dhcp_settled)
+				announce_scan();
+		#else
+			announce_scan();
 		#endif
 
-		// keep the temperature readout live while we sit here
+		// keep the temperature readout live while we sit here, and pin
+		// the logo so scrolling text doesn't carry it off the screen
 		update_temperatures();
+		keep_logo_in_place();
 
 		#ifndef NO_TFTP
 			// No point talking to a tftp server before we have an address
