@@ -469,10 +469,16 @@ static void draw_discord(void)
 	console_set_cursor(x, y);
 }
 
+/* Degrees C at which a reading stops being green. Green up to 68, yellow
+ * from 69, red from 80. */
+#define TEMP_WARN 69
+#define TEMP_HOT  80
+
+static const char *sensorNames[TEMPS_LINES] = { "CPU", "GPU", "EDRAM", "MB" };
+
 static void draw_temperatures(void)
 {
-	static const char *sensorNames[4] = { "CPU", "GPU", "EDRAM", "MB" };
-	uint16_t sensor[4];
+	uint16_t sensor[TEMPS_LINES];
 	int col = panel_col(TEMPS_WIDTH);
 	int x = console_get_cursor_x();
 	int y = console_get_cursor_y();
@@ -482,9 +488,22 @@ static void draw_temperatures(void)
 
 	for (i = 0; i < TEMPS_LINES; i++)
 	{
+		int deg = sensor[i] >> 8;
+		unsigned int colour;
+		char value[8];
+
+		if (deg >= TEMP_HOT)
+			colour = CONSOLE_COLOR_RED;
+		else if (deg >= TEMP_WARN)
+			colour = CONSOLE_WARN;
+		else
+			colour = CONSOLE_SUCCESS;
+
+		sprintf(value, "%2d.%01dC", deg, ((sensor[i] & 0xff) * 10) / 256);
+
 		console_set_cursor(col, TEMPS_ROW + i);
-		printf("%-5s %2d.%01dC", sensorNames[i],
-			sensor[i] >> 8, ((sensor[i] & 0xff) * 10) / 256);
+		printf("%-5s ", sensorNames[i]);
+		print_coloured(colour, value);
 	}
 
 	console_set_cursor(x, y);
@@ -615,18 +634,38 @@ static void print_mfg_date(unsigned char *kv)
 {
 	unsigned char cert[0x1A8];
 	int n = sizeof(cert);
-	int i;
+	unsigned char *d;
+	int i, digits = 0, printable = 0;
 
 	if (kv_get_key(XEKEY_CONSOLE_CERTIFICATE, cert, &n, kv) != 0)
 		return;
 
-	for (i = 0; i < 8; i++)
-		if (cert[0x1C + i] < '0' || cert[0x1C + i] > '9')
-			return;
+	d = &cert[0x1C]; /* ManufacturingDate, 8 bytes */
 
-	printf("   * Mfg Date: %c%c%c%c-%c%c-%c%c\n",
-		cert[0x1C], cert[0x1D], cert[0x1E], cert[0x1F],
-		cert[0x20], cert[0x21], cert[0x22], cert[0x23]);
+	for (i = 0; i < 8 && !d[i]; i++)
+		;
+	if (i == 8)
+		return; /* field never programmed */
+
+	for (i = 0; i < 8; i++)
+	{
+		if (d[i] >= '0' && d[i] <= '9')
+			digits++;
+		if (d[i] >= 0x20 && d[i] < 0x7f)
+			printable++;
+	}
+
+	/* Plain YYYYMMDD is the documented form, but not every console carries
+	 * it that way, so fall back to showing the bytes rather than silently
+	 * dropping the line. */
+	if (digits == 8)
+		printf("   * Mfg Date: %c%c%c%c-%c%c-%c%c\n",
+			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+	else if (printable == 8)
+		printf("   * Mfg Date: %.8s\n", (char *)d);
+	else
+		printf("   * Mfg Date: %02X%02X%02X%02X%02X%02X%02X%02X\n",
+			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 }
 
 static void print_console_keys(void)
@@ -935,7 +974,7 @@ int main(){
 	draw_temperatures(); /* drawn under the logo, not inline */
 	printf("\n");
 
-	detect_line("HDD       ", ataPresent, &ata);
+	detect_line("Storage", ataPresent, &ata);
 	detect_line("Disc Drive", atapiPresent, &atapi);
 
 	/* how the bring-up went */
