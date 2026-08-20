@@ -61,11 +61,15 @@ static const char *consoleNames[] =
  * x inward from the right edge of the safe area. */
 /* Screen palette, packed the way console_set_colors() wants it:
  * (b<<24)|(g<<16)|(r<<8). Charcoal reads softer than pure black on a large
- * display and gives the green/yellow/purple more to push against. The panel
- * is a shade lighter so the logo block sits on something rather than
- * floating - safe because text never reaches those columns. */
-#define COLOUR_BG    0x1C181800	/* RGB(24,24,28) */
-#define COLOUR_PANEL 0x2E282800	/* RGB(40,40,46) */
+ * display and gives the green/yellow/purple more to push against. */
+#define COLOUR_BG 0x1C181800	/* RGB(24,24,28) */
+
+/* Drop shadow for the logo: its own alpha mask drawn black and offset,
+ * underneath the real thing. The Discord mark is left flat - at 19x14 a
+ * shadow only muddies it - and the handle and temperatures are console text
+ * on the 8x16 cell grid, where a few pixel offset isn't expressible. */
+#define SHADOW_DX 3
+#define SHADOW_DY 3
 
 #define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
 
@@ -112,32 +116,35 @@ static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 		     b0 + (b - b0) * (int)a / 255);
 }
 
-/* Everything in the panel draws against COLOUR_PANEL rather than the screen
- * background: blend_pset() blends over console_color[0], and console_draw_char()
- * fills each character cell with it, so setting it for the duration keeps the
- * artwork and the text sitting on the backdrop instead of punching through it. */
+/* Two passes: the whole shadow first, then the mark on top. Drawing them per
+ * pixel would let the shadow fall over parts of the mark already placed. */
 void draw_logo()
 {
-	unsigned int bg = console_color[0], fg = console_color[1];
 	int left = panel_right() - LOGO_WIDTH;
 	unsigned int x, y;
+	int pass;
 
-	console_set_colors(COLOUR_PANEL, fg);
-
-	for (y = 0; y < LOGO_HEIGHT; y++)
+	for (pass = 0; pass < 2; pass++)
 	{
-		for (x = 0; x < LOGO_WIDTH; x++)
+		for (y = 0; y < LOGO_HEIGHT; y++)
 		{
-			unsigned int a = logo_alpha[y * LOGO_WIDTH + x];
+			for (x = 0; x < LOGO_WIDTH; x++)
+			{
+				unsigned int a = logo_alpha[y * LOGO_WIDTH + x];
 
-			if (!a)
-				continue; /* fully transparent, leave the backdrop */
+				if (!a)
+					continue; /* transparent, leave the background */
 
-			blend_pset(left + x, LOGO_TOP + y, a, 255, 255, 255);
+				if (pass == 0)
+					blend_pset(left + x + SHADOW_DX,
+						   LOGO_TOP + y + SHADOW_DY,
+						   a, 0, 0, 0);
+				else
+					blend_pset(left + x, LOGO_TOP + y,
+						   a, 255, 255, 255);
+			}
 		}
 	}
-
-	console_set_colors(bg, fg);
 }
 
 /* Right hand panel, stacked under the logo. The logo's last pixel row is
@@ -165,15 +172,17 @@ static int screen_scrolled;
  * again at home. Nothing else uses these columns, so the wipe is safe. */
 static void redraw_logo(void)
 {
+	unsigned int bg = console_color[0];
+	unsigned int r0 = (bg >>  8) & 0xff;
+	unsigned int g0 = (bg >> 16) & 0xff;
+	unsigned int b0 = (bg >> 24) & 0xff;
 	int left = panel_right() - LOGO_WIDTH;
 	unsigned int x, y;
 
+	/* widened by the shadow offset so its edge gets cleared too */
 	for (y = 0; y < LOGO_BAND_H; y++)
-		for (x = 0; x < LOGO_WIDTH; x++)
-			console_pset(left + x, y,
-				     (COLOUR_PANEL >>  8) & 0xff,
-				     (COLOUR_PANEL >> 16) & 0xff,
-				     (COLOUR_PANEL >> 24) & 0xff);
+		for (x = 0; x < LOGO_WIDTH + SHADOW_DX; x++)
+			console_pset(left + x, y, r0, g0, b0);
 
 	draw_logo();
 	draw_discord();
@@ -463,13 +472,11 @@ static void draw_discord(void)
 	int col = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
 	int iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
 	int icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
-	unsigned int bg = console_color[0], fg = console_color[1];
 	int x = console_get_cursor_x();
 	int y = console_get_cursor_y();
 	unsigned int ix, iy;
 
-	console_set_colors(COLOUR_PANEL, fg);
-
+	/* no shadow on the mark - it's small enough that one would just muddy it */
 	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
 	{
 		for (ix = 0; ix < DISCORD_WIDTH; ix++)
@@ -487,7 +494,6 @@ static void draw_discord(void)
 	console_set_cursor(col, DISCORD_ROW);
 	print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
 
-	console_set_colors(bg, fg);
 	console_set_cursor(x, y);
 }
 
@@ -500,7 +506,6 @@ static const char *sensorNames[TEMPS_LINES] = { "CPU", "GPU", "EDRAM", "MB" };
 
 static void draw_temperatures(void)
 {
-	unsigned int bg = console_color[0], fg = console_color[1];
 	uint16_t sensor[TEMPS_LINES];
 	int col = panel_col(TEMPS_WIDTH);
 	int x = console_get_cursor_x();
@@ -508,7 +513,6 @@ static void draw_temperatures(void)
 	int i;
 
 	xenon_smc_query_sensors(sensor);
-	console_set_colors(COLOUR_PANEL, fg);
 
 	for (i = 0; i < TEMPS_LINES; i++)
 	{
@@ -530,7 +534,6 @@ static void draw_temperatures(void)
 		print_coloured(colour, value);
 	}
 
-	console_set_colors(bg, fg);
 	console_set_cursor(x, y);
 }
 
