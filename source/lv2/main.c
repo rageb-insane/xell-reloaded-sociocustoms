@@ -59,6 +59,14 @@ static const char *consoleNames[] =
  * background happens to be rather than assuming black. console_pset() does
  * the framebuffer's 32x32 tile swizzle for us, and the _right variant counts
  * x inward from the right edge of the safe area. */
+/* Screen palette, packed the way console_set_colors() wants it:
+ * (b<<24)|(g<<16)|(r<<8). Charcoal reads softer than pure black on a large
+ * display and gives the green/yellow/purple more to push against. The panel
+ * is a shade lighter so the logo block sits on something rather than
+ * floating - safe because text never reaches those columns. */
+#define COLOUR_BG    0x1C181800	/* RGB(24,24,28) */
+#define COLOUR_PANEL 0x2E282800	/* RGB(40,40,46) */
+
 #define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
 
 /* console_scroll32() shifts the whole framebuffer from row 0, in 32 pixel
@@ -104,10 +112,17 @@ static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 		     b0 + (b - b0) * (int)a / 255);
 }
 
+/* Everything in the panel draws against COLOUR_PANEL rather than the screen
+ * background: blend_pset() blends over console_color[0], and console_draw_char()
+ * fills each character cell with it, so setting it for the duration keeps the
+ * artwork and the text sitting on the backdrop instead of punching through it. */
 void draw_logo()
 {
+	unsigned int bg = console_color[0], fg = console_color[1];
 	int left = panel_right() - LOGO_WIDTH;
 	unsigned int x, y;
+
+	console_set_colors(COLOUR_PANEL, fg);
 
 	for (y = 0; y < LOGO_HEIGHT; y++)
 	{
@@ -116,11 +131,13 @@ void draw_logo()
 			unsigned int a = logo_alpha[y * LOGO_WIDTH + x];
 
 			if (!a)
-				continue; /* fully transparent, leave the background */
+				continue; /* fully transparent, leave the backdrop */
 
 			blend_pset(left + x, LOGO_TOP + y, a, 255, 255, 255);
 		}
 	}
+
+	console_set_colors(bg, fg);
 }
 
 /* Right hand panel, stacked under the logo. The logo's last pixel row is
@@ -148,16 +165,15 @@ static int screen_scrolled;
  * again at home. Nothing else uses these columns, so the wipe is safe. */
 static void redraw_logo(void)
 {
-	unsigned int bg = console_color[0];
-	unsigned int r0 = (bg >>  8) & 0xff;
-	unsigned int g0 = (bg >> 16) & 0xff;
-	unsigned int b0 = (bg >> 24) & 0xff;
 	int left = panel_right() - LOGO_WIDTH;
 	unsigned int x, y;
 
 	for (y = 0; y < LOGO_BAND_H; y++)
 		for (x = 0; x < LOGO_WIDTH; x++)
-			console_pset(left + x, y, r0, g0, b0);
+			console_pset(left + x, y,
+				     (COLOUR_PANEL >>  8) & 0xff,
+				     (COLOUR_PANEL >> 16) & 0xff,
+				     (COLOUR_PANEL >> 24) & 0xff);
 
 	draw_logo();
 	draw_discord();
@@ -447,9 +463,12 @@ static void draw_discord(void)
 	int col = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
 	int iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
 	int icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
+	unsigned int bg = console_color[0], fg = console_color[1];
 	int x = console_get_cursor_x();
 	int y = console_get_cursor_y();
 	unsigned int ix, iy;
+
+	console_set_colors(COLOUR_PANEL, fg);
 
 	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
 	{
@@ -468,6 +487,7 @@ static void draw_discord(void)
 	console_set_cursor(col, DISCORD_ROW);
 	print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
 
+	console_set_colors(bg, fg);
 	console_set_cursor(x, y);
 }
 
@@ -480,6 +500,7 @@ static const char *sensorNames[TEMPS_LINES] = { "CPU", "GPU", "EDRAM", "MB" };
 
 static void draw_temperatures(void)
 {
+	unsigned int bg = console_color[0], fg = console_color[1];
 	uint16_t sensor[TEMPS_LINES];
 	int col = panel_col(TEMPS_WIDTH);
 	int x = console_get_cursor_x();
@@ -487,6 +508,7 @@ static void draw_temperatures(void)
 	int i;
 
 	xenon_smc_query_sensors(sensor);
+	console_set_colors(COLOUR_PANEL, fg);
 
 	for (i = 0; i < TEMPS_LINES; i++)
 	{
@@ -508,6 +530,7 @@ static void draw_temperatures(void)
 		print_coloured(colour, value);
 	}
 
+	console_set_colors(bg, fg);
 	console_set_cursor(x, y);
 }
 
@@ -814,7 +837,7 @@ int main(){
 #elif defined XTUDO_THEME
 	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_PINK); // Pink text on black bg
 #elif defined DEFAULT_THEME
-	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_WHITE); // White text on black bg
+	console_set_colors(COLOUR_BG,CONSOLE_COLOR_WHITE); // White text on charcoal
 #else
 	console_set_colors(CONSOLE_COLOR_BLACK,CONSOLE_COLOR_GREEN); // Green text on black bg
 #endif
@@ -824,8 +847,7 @@ int main(){
 	 * hook, so there's no muting it - wipe the screen instead. clrscr also
 	 * puts the cursor back to 0,0, so the splash starts at the top. */
 	console_clrscr();
-	draw_logo();
-	draw_discord();
+	redraw_logo(); /* paints the backdrop, then everything on it */
 
 	/* The git rev is the only thing that tells you which build actually
 	 * booted, which matters when reflashing repeatedly. RELEASE carries the
