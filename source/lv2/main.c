@@ -34,6 +34,7 @@
 #include "file.h"
 #include "discord.h"
 #include "logo.h"
+#include "regmark.h"
 
 #ifndef NO_TFTP
 #include "tftp/tftp.h"
@@ -114,6 +115,60 @@ static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 		     r0 + (r - r0) * (int)a / 255,
 		     g0 + (g - g0) * (int)a / 255,
 		     b0 + (b - b0) * (int)a / 255);
+}
+
+/* The four square Microsoft mark. Flat colours in a 2x2 grid, so it's four
+ * filled rectangles rather than a bitmap - nothing to store, and it stays
+ * crisp instead of picking up the antialiasing a scaled image would. */
+/* 5px squares put the mark at 11px, which lands its bottom edge exactly on
+ * the text baseline (the font's capitals occupy rows 2..11 of the 16px cell)
+ * with the top a pixel above cap height - so it sits on the line rather than
+ * hanging into the descender space below it. */
+#define MSMARK_SQ   5	/* edge of one square, pixels */
+#define MSMARK_GAP  1
+#define MSMARK_SIZE (MSMARK_SQ * 2 + MSMARK_GAP)
+
+static void draw_msmark(int x, int y)
+{
+	/* sampled from the reference artwork, not the 2012 brand palette */
+	static const unsigned char square[4][3] =
+	{
+		{ 0xF1, 0x51, 0x1B },	/* top left     */
+		{ 0x80, 0xCC, 0x28 },	/* top right    */
+		{ 0x00, 0xAD, 0xEF },	/* bottom left  */
+		{ 0xFB, 0xBC, 0x09 },	/* bottom right */
+	};
+	int i, sx, sy;
+
+	for (i = 0; i < 4; i++)
+	{
+		int ox = (i & 1) ? MSMARK_SQ + MSMARK_GAP : 0;
+		int oy = (i & 2) ? MSMARK_SQ + MSMARK_GAP : 0;
+
+		for (sy = 0; sy < MSMARK_SQ; sy++)
+			for (sx = 0; sx < MSMARK_SQ; sx++)
+				console_pset(x + ox + sx, y + oy + sy,
+					     square[i][0], square[i][1], square[i][2]);
+	}
+}
+
+/* libxenon's font is CP437, which has no registered sign anywhere in its 256
+ * glyphs - index 0xAE is the left double angle quote, whatever the generated
+ * comment in font_8x16.h claims. So it gets drawn rather than printed. */
+static void draw_regmark(int x, int y)
+{
+	unsigned int ix, iy;
+
+	for (iy = 0; iy < REGMARK_HEIGHT; iy++)
+	{
+		for (ix = 0; ix < REGMARK_WIDTH; ix++)
+		{
+			unsigned int a = regmark_alpha[iy * REGMARK_WIDTH + ix];
+
+			if (a)
+				blend_pset(x + ix, y + iy, a, 255, 255, 255);
+		}
+	}
 }
 
 /* Two passes: the whole shadow first, then the mark on top. Drawing them per
@@ -824,6 +879,7 @@ int main(){
 	int consoleType = 0;
 	int nandStatus = NAND_SKIPPED;
 	int ataPresent = 0, atapiPresent = 0;
+	int procRow;
 #ifndef NO_NETWORKING
 	int netStatus = NETWORK_INIT_FAILURE;
 #endif
@@ -924,11 +980,22 @@ int main(){
 	/* There's no register that reports the core clock, so take it from
 	 * libxenon's own timebase constant (the timebase runs at core/64) rather
 	 * than hardcoding a number here. */
-	printf("\nMicrosoft %s %08x %u.%03uGHz Processor\n",
+	printf("\n");
+
+	/* Leading spaces make room for the four square mark, and the pair after
+	 * Microsoft for the registered sign - both are wider than the 8px cell
+	 * a single space would give them. */
+	procRow = console_get_cursor_y();
+
+	printf("  Microsoft  %s %08x %u.%03uGHz Processor\n",
 			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
 			 mfspr(287),
 			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
 			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
+
+	/* both bottom aligned to the text baseline at row 11 */
+	draw_msmark(0, procRow * 16 + 1);
+	draw_regmark(11 * 8, procRow * 16);
 
 	printf("Console Type: %s - %s\n",
 			 (consoleType >= 0 && consoleType <= 8) ? consoleNames[consoleType] : "Unknown",
