@@ -385,6 +385,24 @@ static void network_dhcp_poll(void)
  * type itself is detected; this table just names the silicon that goes with
  * it. Vejle is the 45nm XCGPU's real name - "Valhalla" was only its working
  * name before the chip was finalised, though it stuck in a lot of places. */
+/* GPU die per console generation. Two of these are approximations libxenon
+ * can't resolve: Zephyr_C shipped Rhea while earlier Zephyrs were Xenos, and
+ * July 2009 Jaspers and every Tonasket carry Kronos rather than Zeus - both
+ * report identically here. From Trinity on the GPU shares a die with the CPU,
+ * so these match cpuNames. */
+static const char *gpuNames[] =
+{
+	"Xenos",	/* Xenon */
+	"Xenos",	/* Zephyr        - Rhea on Zephyr_C */
+	"Rhea",		/* Falcon */
+	"Zeus",		/* Jasper        - Kronos on July 2009 boards */
+	"Vejle",	/* Trinity */
+	"Vejle",	/* Corona */
+	"Vejle",	/* Corona MMC */
+	"Oban",		/* Winchester */
+	"Oban",		/* Winchester MMC */
+};
+
 static const char *cpuNames[] =
 {
 	"Waternoose",	/* Xenon         - 90nm CPU */
@@ -912,9 +930,9 @@ int main(){
 			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
 			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
 
-	printf("Console Type: %s (PVR %08x)\n",
+	printf("Console Type: %s - %s\n",
 			 (consoleType >= 0 && consoleType <= 8) ? consoleNames[consoleType] : "Unknown",
-			 mfspr(287));
+			 (consoleType >= 0 && consoleType <= 8) ? gpuNames[consoleType] : "Unknown");
 
 	/* The three IDs libxenon narrows the board down with. Board revisions that
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
