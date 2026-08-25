@@ -17,6 +17,7 @@
 #include <xenon_soc/xenon_secotp.h>
 #include <xenon_soc/xenon_power.h>
 #include <xenon_soc/xenon_io.h>
+#include <pci/io.h>	/* read32, for the GPU's PCI config space */
 #include <xenon_sound/sound.h>
 #include <xenon_smc/xenon_smc.h>
 #include <xenon_smc/xenon_gpio.h>
