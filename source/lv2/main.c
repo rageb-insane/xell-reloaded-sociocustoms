@@ -102,6 +102,18 @@ static int panel_right(void)
 	return console_get_cursor_max_x() * 8 - LOGO_MARGIN;
 }
 
+/* The panel costs 28 columns and the longest text line runs to about 72, so
+ * below roughly 100 columns the two cannot coexist - at 480p there are only
+ * 74 and the text would run straight through the logo. Rather than draw them
+ * over each other, the whole right hand panel is dropped on narrow screens
+ * and the temperatures print inline instead. */
+#define PANEL_MIN_COLS 100
+
+static int panel_fits(void)
+{
+	return console_get_cursor_max_x() >= PANEL_MIN_COLS;
+}
+
 /* Column at which a field of len characters sits centred under the logo.
  * Text lands on 8 pixel boundaries so it can be a few pixels off dead
  * centre, which is invisible at this size. */
@@ -166,9 +178,13 @@ static void draw_msmark(int x, int y)
  * pixel would let the shadow fall over parts of the mark already placed. */
 void draw_logo()
 {
-	int left = panel_right() - LOGO_WIDTH;
+	int left, pass;
 	unsigned int x, y;
-	int pass;
+
+	if (!panel_fits())
+		return;
+
+	left = panel_right() - LOGO_WIDTH;
 
 	for (pass = 0; pass < 2; pass++)
 	{
@@ -218,12 +234,17 @@ static int screen_scrolled;
  * again at home. Nothing else uses these columns, so the wipe is safe. */
 static void redraw_logo(void)
 {
-	unsigned int bg = console_color[0];
-	unsigned int r0 = (bg >>  8) & 0xff;
-	unsigned int g0 = (bg >> 16) & 0xff;
-	unsigned int b0 = (bg >> 24) & 0xff;
-	int left = panel_right() - LOGO_WIDTH;
-	unsigned int x, y;
+	unsigned int bg, r0, g0, b0, x, y;
+	int left;
+
+	if (!panel_fits())
+		return;
+
+	bg = console_color[0];
+	r0 = (bg >>  8) & 0xff;
+	g0 = (bg >> 16) & 0xff;
+	b0 = (bg >> 24) & 0xff;
+	left = panel_right() - LOGO_WIDTH;
 
 	/* widened by the shadow offset so its edge gets cleared too */
 	for (y = 0; y < LOGO_BAND_H; y++)
@@ -438,8 +459,17 @@ static void network_dhcp_poll(void)
  * so these match cpuNames. */
 static const char *gpuNames[] =
 {
-	"Xenos",	/* Xenon */
-	"Xenos",	/* Zephyr        - Rhea on Zephyr_C */
+	/* Xenon shipped Y1 (codename C1). Boards refurbished by Microsoft came
+	 * back as Elpis - a Xenon reworked around a modified Rhea - and kept
+	 * their original serial, so there's nothing here to detect it by. */
+	"Y1",		/* Xenon */
+
+	/* Zephyr ran through three GPUs: Y1 on Zephyr_A, Y2 on Zephyr_B (a 2007
+	 * die shrink, still 90nm, eDRAM unchanged), then Rhea on Zephyr_C. The
+	 * sub-revisions report identically to libxenon, and unlike the
+	 * Jasper/Tonasket split there's no confirmed build-date boundary to
+	 * separate them by, so all three are named. */
+	"Y1/Y2/Rhea",	/* Zephyr */
 	"Rhea",		/* Falcon */
 	"Zeus/Kronos",	/* Jasper - see dieNodes, the two are indistinguishable */
 	"Vejle",	/* Trinity */
@@ -528,66 +558,159 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("\n");
 }
 
-/* Probe the eDRAM's own ID register.
- *
- * Zeus and Kronos are the same GPU die - only the eDRAM daughter die differs
- * (Styx-80 vs Styx-65), so no PCI id or revision separates them. The eDRAM
- * does identify itself though: libxenon reads register 0x2000 in
- * edram_init_state1() and keeps it in edram_id/edram_rev.
- *
- * We can't call that function - it configures the eDRAM, branches on state
- * XeLL doesn't set up, and abort()s on failure, all while the console is live
- * on the same GPU. But the read itself is just a register-indirect access
- * through plain MMIO, so it's replicated here read-only: no configuration
- * writes, and every wait is bounded so a console that doesn't answer times
- * out instead of hanging the boot.
- *
- * Whether 0x2000 reads meaningfully without libxenon's configuration writes
- * is the open question - hence displaying the raw value rather than acting
- * on it. */
-/* Plain MMIO accessors, write32n/read32n against 0xec800000 + reg. Non-static
- * in libxenon's xenos.c but absent from xenos.h, so declared here. */
-extern void xenos_write32(int reg, uint32_t val);
-extern uint32_t xenos_read32(int reg);
+/* The console serial says when and where the machine was built: LNNNNNN YWWFF,
+ * where digit 8 is the last digit of the production year, 9-10 the week of
+ * that year, and 11-12 the factory. Read before the console type line so the
+ * GPU name can use it; empty when the keyvault couldn't be read. */
+static char consoleSerial[13];
 
-#define EDRAM_SPIN 100000
-
-static int edram_idle(void)
+static void read_console_serial(void)
 {
-	int spin = EDRAM_SPIN;
+	unsigned char buf[0x0C];
+	unsigned char key[0x10];
+	unsigned char *kv;
+	int n = sizeof(buf);
+	int i, r;
 
-	while (xenos_read32(0x3c4c))
-		if (--spin <= 0)
-			return 0; /* never went idle */
+	consoleSerial[0] = '\0';
 
-	return 1;
-}
+	if (xenon_logical_nand_data_ok() != 0 ||
+	    KV_FLASH_OFFSET == 0 || KV_FLASH_SIZE == 0)
+		return;
 
-static int edram_probe_id(uint32_t *out)
-{
-	uint32_t res;
-	int pass;
+	kv = malloc(KV_FLASH_SIZE);
+	if (kv == NULL)
+		return;
 
-	if (!edram_idle())
-		return 0;
+	memset(key, '\0', sizeof(key));
+	r = kv_read(kv, 0);
+	if (r == 2 && get_virtual_cpukey(key) == 0)
+		r = kv_read(kv, 1);
 
-	/* Latch and read twice, discarding the first result, exactly as
-	 * libxenon's edram_read() does. That pattern is there because the port
-	 * is pipelined - a single read hands back the previous value, not the
-	 * one just addressed. */
-	for (pass = 0; pass < 2; pass++)
+	if (r == 0 && kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, buf, &n, kv) == 0)
 	{
-		xenos_write32(0x3c44, 0x2000);
-		if (!edram_idle())
-			return 0;
+		for (i = 0; i < 0x0C; i++)
+			if (buf[i] < '0' || buf[i] > '9')
+				break;
 
-		res = xenos_read32(0x3c48);
-		if (!edram_idle())
-			return 0;
+		if (i == 0x0C) /* all digits, so it decodes */
+		{
+			memcpy(consoleSerial, buf, 0x0C);
+			consoleSerial[0x0C] = '\0';
+		}
 	}
 
-	*out = res;
-	return 1;
+	free(kv);
+}
+
+static int serial_year(void)
+{
+	if (!consoleSerial[0])
+		return -1;
+
+	/* one digit, so the decade comes from the console generation - the
+	 * original 360 ran 2005-2010, which makes 5..9 the 2000s and 0 = 2010 */
+	return (consoleSerial[7] == '0') ? 2010 : 2000 + (consoleSerial[7] - '0');
+}
+
+static int serial_week(void)
+{
+	if (!consoleSerial[0])
+		return -1;
+
+	return (consoleSerial[8] - '0') * 10 + (consoleSerial[9] - '0');
+}
+
+static const char *serial_factory(void)
+{
+	if (!consoleSerial[0])
+		return NULL;
+
+	if (consoleSerial[10] == '0')
+		switch (consoleSerial[11])
+		{
+		case '2': return "Mexico";
+		case '3': return "Hungary";
+		case '5': return "China";
+		case '6': return "Taiwan";
+		}
+
+	return NULL;
+}
+
+/* The 90nm Y1 and the 80nm Rhea shipped with a low-Tg underfill that cracked
+ * under thermal cycling - the classic RRoD failure. Microsoft moved to a
+ * high-Tg underfill and standardised it around June 2008, so a board built
+ * after that left the factory with the reliable part.
+ *
+ * This reports what the console shipped with, and nothing more. It cannot
+ * know whether the GPU was replaced since, and on exactly these boards that
+ * is common: a refurbished console, a reball, or a retrofitted fixed part all
+ * carry reliable silicon whatever the serial says. Treat "pre-fix" as "shipped
+ * with the bad underfill", not "has it now".
+ *
+ * Only the generations that had the defect are annotated. */
+#define GPU_FIX_YEAR 2008
+#define GPU_FIX_WEEK 26	/* ~June 2008, when the high-Tg part standardised */
+
+static const char *gpu_underfill(int type)
+{
+	int year = serial_year();
+	int week = serial_week();
+
+	if (type != REV_XENON && type != REV_ZEPHYR && type != REV_FALCON)
+		return "";
+
+	if (year < 0)
+		return "";	/* no serial to date it by */
+
+	if (year > GPU_FIX_YEAR || (year == GPU_FIX_YEAR && week >= GPU_FIX_WEEK))
+		return ", fixed";
+
+	return ", pre-fix";
+}
+
+/* libxenon reports Jasper and Tonasket identically - Tonasket is Jasper_B,
+ * the last of the original 360 boards, and it differs only in carrying the
+ * Kronos GPU (Zeus with the 65nm Styx-65 eDRAM in place of the 80nm one).
+ * Same CPU, same GPU die, same PCI ids, so no register separates them.
+ *
+ * What does separate them is when the board was built, and the serial carries
+ * that. The changeover ran through July 2009 with both shipping:
+ *
+ *   week 29 of 2009, factory 05, is a Tonasket with a Kronos - confirmed
+ *   against the board itself, so that week and later is Tonasket.
+ *
+ * Weeks 27 and 28 sit between the documented start of July and that reading,
+ * so they report both names rather than guessing. The confirmed sample is one
+ * console from one factory; another plant may have switched a week either
+ * side, which is the thing to revisit if a board ever contradicts this.
+ *
+ * which: 0 board, 1 GPU, 2 eDRAM node. */
+#define TONASKET_WEEK 29	/* first 2009 week confirmed Tonasket */
+
+static const char *jasper_variant(int which)
+{
+	static const char *before[3] = { "Jasper",   "Zeus",   "80nm" };
+	static const char *after[3]  = { "Tonasket", "Kronos", "65nm" };
+	static const char *either[3] =
+		{ "Jasper/Tonasket", "Zeus/Kronos", "80/65nm" };
+	int year = serial_year();
+	int week = serial_week();
+
+	if (year < 0)
+		return either[which];		/* no serial to date it by */
+
+	if (year > 2009)
+		return after[which];		/* well past the changeover */
+
+	if (year < 2009 || week < 27)
+		return before[which];		/* before it started */
+
+	if (week >= TONASKET_WEEK)
+		return after[which];		/* confirmed side */
+
+	return either[which];			/* weeks 27-28 */
 }
 
 /* libxenon exposes the PCI bridge's revision but not the GPU's, though both
@@ -671,16 +794,21 @@ static const char *nand_type_name(int meta_type)
 
 static void draw_discord(void)
 {
-	int len = (int)strlen(DISCORD_TEXT);
-	int left = panel_right() - LOGO_WIDTH;
-	int combo = DISCORD_WIDTH + DISCORD_GAP + len * 8;
-	/* centre the mark and handle together, then hang the mark off the text */
-	int col = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
-	int iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
-	int icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
-	int x = console_get_cursor_x();
-	int y = console_get_cursor_y();
+	int len, left, combo, col, iconx, icony, x, y;
 	unsigned int ix, iy;
+
+	if (!panel_fits())
+		return;
+
+	len   = (int)strlen(DISCORD_TEXT);
+	left  = panel_right() - LOGO_WIDTH;
+	combo = DISCORD_WIDTH + DISCORD_GAP + len * 8;
+	/* centre the mark and handle together, then hang the mark off the text */
+	col   = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
+	iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
+	icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
+	x     = console_get_cursor_x();
+	y     = console_get_cursor_y();
 
 	/* no shadow on the mark - it's small enough that one would just muddy it */
 	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
@@ -710,34 +838,64 @@ static void draw_discord(void)
 
 static const char *sensorNames[TEMPS_LINES] = { "CPU", "GPU", "EDRAM", "MB" };
 
+/* colour for a reading, shared by the panel and inline forms */
+static unsigned int temp_colour(int deg)
+{
+	if (deg >= TEMP_HOT)
+		return CONSOLE_COLOR_RED;
+
+	if (deg >= TEMP_WARN)
+		return CONSOLE_WARN;
+
+	return CONSOLE_SUCCESS;
+}
+
+/* One line, for screens with no room for the panel. */
+static void print_temperatures_inline(void)
+{
+	uint16_t sensor[TEMPS_LINES];
+	int i;
+
+	xenon_smc_query_sensors(sensor);
+
+	printf("   Temps:");
+	for (i = 0; i < TEMPS_LINES; i++)
+	{
+		char value[10];
+		int deg = sensor[i] >> 8;
+
+		sprintf(value, " %d.%01dC", deg, ((sensor[i] & 0xff) * 10) / 256);
+
+		printf(" %s", sensorNames[i]);
+		print_coloured(temp_colour(deg), value);
+	}
+	printf("\n");
+}
+
 static void draw_temperatures(void)
 {
 	uint16_t sensor[TEMPS_LINES];
-	int col = panel_col(TEMPS_WIDTH);
-	int x = console_get_cursor_x();
-	int y = console_get_cursor_y();
-	int i;
+	int col, x, y, i;
+
+	if (!panel_fits())
+		return;
+
+	col = panel_col(TEMPS_WIDTH);
+	x = console_get_cursor_x();
+	y = console_get_cursor_y();
 
 	xenon_smc_query_sensors(sensor);
 
 	for (i = 0; i < TEMPS_LINES; i++)
 	{
 		int deg = sensor[i] >> 8;
-		unsigned int colour;
 		char value[8];
-
-		if (deg >= TEMP_HOT)
-			colour = CONSOLE_COLOR_RED;
-		else if (deg >= TEMP_WARN)
-			colour = CONSOLE_WARN;
-		else
-			colour = CONSOLE_SUCCESS;
 
 		sprintf(value, "%2d.%01dC", deg, ((sensor[i] & 0xff) * 10) / 256);
 
 		console_set_cursor(col, TEMPS_ROW + i);
 		printf("%-5s ", sensorNames[i]);
-		print_coloured(colour, value);
+		print_coloured(temp_colour(deg), value);
 	}
 
 	console_set_cursor(x, y);
@@ -964,7 +1122,21 @@ static void print_console_keys(void)
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
 		print_key("   * DVD Key", key);
 
-	print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
+	/* read earlier for the GPU name; show what it decodes to while we're here */
+	if (consoleSerial[0])
+	{
+		const char *factory = serial_factory();
+
+		printf("   * Serial: %s  (%d week %d", consoleSerial,
+			serial_year(), serial_week());
+
+		if (factory)
+			printf(", %s", factory);
+
+		printf(")\n");
+	}
+	else
+		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
 	print_kv_ascii("   * Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
 	print_mfg_date(kv);
 
@@ -1062,7 +1234,8 @@ int main(){
 	/* The git rev is the only thing that tells you which build actually
 	 * booted, which matters when reflashing repeatedly. RELEASE carries the
 	 * Makefile's quoting when the repo has no tags, so use GITREV directly. */
-	printf("XeLL git-" GITREV " - Copyright (C) 2007-2026 LibXenon.org, Free60.org, Et al.\n\n");
+	/* kept under 74 columns so it doesn't wrap at 480p */
+	printf("XeLL git-" GITREV " - (C) 2007-2026 LibXenon.org, Free60.org\n\n");
 
 	/* build details go to the log and the uart, not the screen */
 	console_close();
@@ -1103,6 +1276,10 @@ int main(){
 
 	xenon_config_init();
 
+	/* before anything is printed - the console type line needs the build date
+	 * out of the serial to name a Jasper's GPU */
+	read_console_serial();
+
 	/* Everything worth writing down is readable as soon as the NAND is up, so
 	 * print it before we go anywhere near the network - no waiting on a DHCP
 	 * server to see your fuses, cpu key, serial and dvd key. */
@@ -1129,10 +1306,16 @@ int main(){
 	/* bottom aligned to the text baseline at row 11 */
 	draw_msmark(0, procRow * 16 + 1);
 
-	printf("Console Type: %s - %s%s\n",
-			 (consoleType >= 0 && consoleType <= 8) ? consoleNames[consoleType] : "Unknown",
-			 (consoleType >= 0 && consoleType <= 8) ? gpuNames[consoleType] : "Unknown",
-			 die_node(consoleType, 1));
+	if (consoleType >= 0 && consoleType <= 8)
+		printf("Console Type: %s - %s (%dnm%s)\n",
+			 (consoleType == REV_JASPER) ? jasper_variant(0)
+						     : consoleNames[consoleType],
+			 (consoleType == REV_JASPER) ? jasper_variant(1)
+						     : gpuNames[consoleType],
+			 dieNodes[consoleType].gpu,
+			 gpu_underfill(consoleType));
+	else
+		printf("Console Type: Unknown (PVR %08x)\n", mfspr(287));
 
 	/* The three IDs libxenon narrows the board down with. Board revisions that
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
@@ -1228,24 +1411,29 @@ int main(){
 
 	/* Read from the host bridge register HWINIT fills in, so this reflects
 	 * what's actually installed rather than assuming the stock 512MB. */
-	/* eDRAM is 10MB on every console; only the node it was fabbed on moved */
-	printf("   Memory: %uK   eDRAM: 10MB%s",
-		xenon_get_ram_size() / 1024, die_node(consoleType, 2));
-
-	{
-		uint32_t edramId;
-
-		if (edram_probe_id(&edramId))
-			printf("  ID: %08X", (unsigned int)edramId);
-	}
-
-	printf("\n");
+	/* eDRAM is 10MB on every console; only the node it was fabbed on moved.
+	 *
+	 * Its ID register at 0x2000 would separate Zeus from Kronos, but reading
+	 * it without libxenon's configuration writes just returns whatever was
+	 * last on the bus - confirmed on hardware, the value moved between cold
+	 * boots. A real reading needs edram_init_state1(), which reconfigures the
+	 * eDRAM under a live console and abort()s on failure, so Jasper keeps
+	 * reporting the pair rather than guessing. */
+	if (consoleType == REV_JASPER)
+		printf("   Memory: %uK   eDRAM: 10MB (%s)\n",
+			xenon_get_ram_size() / 1024, jasper_variant(2));
+	else
+		printf("   Memory: %uK   eDRAM: 10MB%s\n",
+			xenon_get_ram_size() / 1024, die_node(consoleType, 2));
 
 	if (sfc.initialized == SFCX_INITIALIZED)
 		printf("   NAND: %dMB (%s)\n",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
 
-	draw_temperatures(); /* drawn under the logo, not inline */
+	if (panel_fits())
+		draw_temperatures();	/* in the panel, under the logo */
+	else
+		print_temperatures_inline();	/* no panel, so one line here */
 	printf("\n");
 
 	detect_line("Storage", ataPresent, &ata);
