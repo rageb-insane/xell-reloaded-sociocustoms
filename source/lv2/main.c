@@ -440,13 +440,57 @@ static const char *gpuNames[] =
 	"Xenos",	/* Xenon */
 	"Xenos",	/* Zephyr        - Rhea on Zephyr_C */
 	"Rhea",		/* Falcon */
-	"Zeus",		/* Jasper        - Kronos on July 2009 boards */
+	"Zeus/Kronos",	/* Jasper - see dieNodes, the two are indistinguishable */
 	"Vejle",	/* Trinity */
 	"Vejle",	/* Corona */
 	"Vejle",	/* Corona MMC */
 	"Oban",		/* Winchester */
 	"Oban",		/* Winchester MMC */
 };
+
+/* Process node per die, in nanometres, following the console generation. No
+ * register reports this - it follows from the board revision, the same way
+ * the die codenames do. eDRAM is 10MB on every console ever made; only the
+ * node it was fabbed on changed.
+ *
+ * Jasper's eDRAM is the one soft entry: 80nm normally, but the Kronos boards
+ * (July 2009 Jaspers and every Tonasket) carry the 65nm Styx-65, and those
+ * report identically to libxenon. */
+static const struct
+{
+	int cpu;
+	int gpu;
+	const char *edram;
+} dieNodes[] =
+{
+	{ 90, 90, "90nm" },	/* Xenon */
+	{ 90, 90, "80nm" },	/* Zephyr */
+	{ 65, 80, "80nm" },	/* Falcon */
+	{ 65, 65, "80/65nm" },	/* Jasper - Styx-80 on Zeus, Styx-65 on Kronos */
+	{ 45, 45, "65nm" },	/* Trinity */
+	{ 45, 45, "65nm" },	/* Corona */
+	{ 45, 45, "65nm" },	/* Corona MMC */
+	{ 45, 45, "65nm" },	/* Winchester */
+	{ 45, 45, "65nm" },	/* Winchester MMC */
+};
+
+/* " (65nm)", or nothing at all when the console type isn't one we know. One
+ * static buffer, so one call per printf. */
+static const char *die_node(int type, int which)
+{
+	static char buf[16];
+
+	if (type < 0 || type > 8)
+		return "";
+
+	if (which == 2)
+		sprintf(buf, " (%s)", dieNodes[type].edram);
+	else
+		sprintf(buf, " (%dnm)",
+			(which == 0) ? dieNodes[type].cpu : dieNodes[type].gpu);
+
+	return buf;
+}
 
 static const char *cpuNames[] =
 {
@@ -481,6 +525,69 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("   %s... ", label);
 	print_coloured(colour, state);
 	printf("\n");
+}
+
+/* Probe the eDRAM's own ID register.
+ *
+ * Zeus and Kronos are the same GPU die - only the eDRAM daughter die differs
+ * (Styx-80 vs Styx-65), so no PCI id or revision separates them. The eDRAM
+ * does identify itself though: libxenon reads register 0x2000 in
+ * edram_init_state1() and keeps it in edram_id/edram_rev.
+ *
+ * We can't call that function - it configures the eDRAM, branches on state
+ * XeLL doesn't set up, and abort()s on failure, all while the console is live
+ * on the same GPU. But the read itself is just a register-indirect access
+ * through plain MMIO, so it's replicated here read-only: no configuration
+ * writes, and every wait is bounded so a console that doesn't answer times
+ * out instead of hanging the boot.
+ *
+ * Whether 0x2000 reads meaningfully without libxenon's configuration writes
+ * is the open question - hence displaying the raw value rather than acting
+ * on it. */
+/* Plain MMIO accessors, write32n/read32n against 0xec800000 + reg. Non-static
+ * in libxenon's xenos.c but absent from xenos.h, so declared here. */
+extern void xenos_write32(int reg, uint32_t val);
+extern uint32_t xenos_read32(int reg);
+
+#define EDRAM_SPIN 100000
+
+static int edram_idle(void)
+{
+	int spin = EDRAM_SPIN;
+
+	while (xenos_read32(0x3c4c))
+		if (--spin <= 0)
+			return 0; /* never went idle */
+
+	return 1;
+}
+
+static int edram_probe_id(uint32_t *out)
+{
+	uint32_t res;
+
+	if (!edram_idle())
+		return 0;
+
+	xenos_write32(0x3c44, 0x2000);
+	if (!edram_idle())
+		return 0;
+
+	res = xenos_read32(0x3c48);
+	if (!edram_idle())
+		return 0;
+
+	*out = res;
+	return 1;
+}
+
+/* libxenon exposes the PCI bridge's revision but not the GPU's, though both
+ * sit in the same config layout: it reads the low byte of offset 0x08 at the
+ * bridge's base 0xd0000000, so the same read at the GPU's base 0xd0010000 -
+ * the one xenon_get_XenosID() uses - gives the Xenos die revision. */
+static unsigned int xenos_revision(void)
+{
+	return read32(0xd0010008) & 0xff;
 }
 
 /* AV pack IDs as libxenon's own xenos_autoset_mode() reads them - it switches
@@ -1003,8 +1110,9 @@ int main(){
 	 * the 8px cell a single space would give it. */
 	procRow = console_get_cursor_y();
 
-	printf("  Microsoft %s %08x %u.%03uGHz Processor\n",
+	printf("  Microsoft %s%s %08x %u.%03uGHz Processor\n",
 			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
+			 die_node(consoleType, 0),
 			 mfspr(287),
 			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
 			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
@@ -1012,16 +1120,18 @@ int main(){
 	/* bottom aligned to the text baseline at row 11 */
 	draw_msmark(0, procRow * 16 + 1);
 
-	printf("Console Type: %s - %s\n",
+	printf("Console Type: %s - %s%s\n",
 			 (consoleType >= 0 && consoleType <= 8) ? consoleNames[consoleType] : "Unknown",
-			 (consoleType >= 0 && consoleType <= 8) ? gpuNames[consoleType] : "Unknown");
+			 (consoleType >= 0 && consoleType <= 8) ? gpuNames[consoleType] : "Unknown",
+			 die_node(consoleType, 1));
 
 	/* The three IDs libxenon narrows the board down with. Board revisions that
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
 	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
 	 * what would tell them apart. */
-	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x   Video: %ux%u%s\n",
+	printf("GPU ID: %04x rev %02x   PCI Bridge: %02x   DVE: %02x   Video: %ux%u%s\n",
 			 xenon_get_XenosID(),
+			 xenos_revision(),
 			 xenon_get_PCIBridgeRevisionID(),
 			 xenon_get_DVE(),
 			 (unsigned int)ATI_INFO->width,
@@ -1109,7 +1219,18 @@ int main(){
 
 	/* Read from the host bridge register HWINIT fills in, so this reflects
 	 * what's actually installed rather than assuming the stock 512MB. */
-	printf("   Memory: %uK\n", xenon_get_ram_size() / 1024);
+	/* eDRAM is 10MB on every console; only the node it was fabbed on moved */
+	printf("   Memory: %uK   eDRAM: 10MB%s",
+		xenon_get_ram_size() / 1024, die_node(consoleType, 2));
+
+	{
+		uint32_t edramId;
+
+		if (edram_probe_id(&edramId))
+			printf("  ID: %08X", (unsigned int)edramId);
+	}
+
+	printf("\n");
 
 	if (sfc.initialized == SFCX_INITIALIZED)
 		printf("   NAND: %dMB (%s)\n",
