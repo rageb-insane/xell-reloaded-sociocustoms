@@ -54,6 +54,20 @@ static const char *consoleNames[] =
 	"Winchester MMC",
 };
 
+/* The Xenos reports its framebuffer geometry in a fixed structure at
+ * 0xec806100. libxenon reads it in console_init() but keeps the type private
+ * to console.c, so the layout is repeated here rather than exported. */
+struct ati_info
+{
+	uint32_t unknown1[4];
+	uint32_t base;
+	uint32_t unknown2[8];
+	uint32_t width;
+	uint32_t height;
+} __attribute__ ((__packed__));
+
+#define ATI_INFO ((const volatile struct ati_info *)0xec806100)
+
 /* Screen palette, packed the way console_set_colors() wants it:
  * (b<<24)|(g<<16)|(r<<8). Charcoal reads softer than pure black on a large
  * display and gives the green/yellow/purple more to push against. */
@@ -467,6 +481,33 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("   %s... ", label);
 	print_coloured(colour, state);
 	printf("\n");
+}
+
+/* AV pack IDs as libxenon's own xenos_autoset_mode() reads them - it switches
+ * on exactly these values to pick a video mode, so the meanings come from
+ * there rather than from guesswork. Anything unlisted prints its raw byte. */
+static const char *avpack_name(int avpack)
+{
+	switch (avpack)
+	{
+	case 0x13:
+	case 0x14:
+	case 0x1C:
+	case 0x1E:
+	case 0x1F: return "HDMI";
+	case 0x1B:
+	case 0x59:
+	case 0x5B: return "VGA";
+	case 0x0C:
+	case 0x0F: return "Component";
+	case 0x4F: return "Composite HD";
+	case 0x43:
+	case 0x57: return "Composite";
+	case 0x54: return "Composite + S-Video";
+	case 0x47: return "SCART";
+	}
+
+	return NULL;
 }
 
 static const char *av_region_name(int region)
@@ -979,12 +1020,26 @@ int main(){
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
 	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
 	 * what would tell them apart. */
-	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x\n",
+	printf("GPU ID: %04x   PCI Bridge: %02x   DVE: %02x   Video: %ux%u%s\n",
 			 xenon_get_XenosID(),
 			 xenon_get_PCIBridgeRevisionID(),
-			 xenon_get_DVE());
+			 xenon_get_DVE(),
+			 (unsigned int)ATI_INFO->width,
+			 (unsigned int)ATI_INFO->height,
+			 xenos_is_overscan() ? " overscan" : "");
 
-	printf("AV Region: %s\n\n", av_region_name(xenon_config_get_avregion()));
+	{
+		int avpack = xenon_smc_read_avpack();
+		const char *avname = avpack_name(avpack);
+
+		printf("AV Region: %s   AV Pack: ",
+			 av_region_name(xenon_config_get_avregion()));
+
+		if (avname)
+			printf("%s\n\n", avname);
+		else
+			printf("%02X\n\n", avpack); /* unknown, show the raw id */
+	}
 
 #ifndef NO_PRINT_CONFIG
 	printf("Fuses:\n");
@@ -1054,13 +1109,11 @@ int main(){
 
 	/* Read from the host bridge register HWINIT fills in, so this reflects
 	 * what's actually installed rather than assuming the stock 512MB. */
-	printf("\n   Memory: %uK", xenon_get_ram_size() / 1024);
+	printf("   Memory: %uK\n", xenon_get_ram_size() / 1024);
 
 	if (sfc.initialized == SFCX_INITIALIZED)
-		printf("   NAND: %dMB (%s)",
+		printf("   NAND: %dMB (%s)\n",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
-
-	printf("\n");
 
 	draw_temperatures(); /* drawn under the logo, not inline */
 	printf("\n");
