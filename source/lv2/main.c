@@ -563,46 +563,6 @@ static void status_line(const char *label, const char *state, unsigned int colou
  * that year, and 11-12 the factory. Read before the console type line so the
  * GPU name can use it; empty when the keyvault couldn't be read. */
 static char consoleSerial[13];
-
-static void read_console_serial(void)
-{
-	unsigned char buf[0x0C];
-	unsigned char key[0x10];
-	unsigned char *kv;
-	int n = sizeof(buf);
-	int i, r;
-
-	consoleSerial[0] = '\0';
-
-	if (xenon_logical_nand_data_ok() != 0 ||
-	    KV_FLASH_OFFSET == 0 || KV_FLASH_SIZE == 0)
-		return;
-
-	kv = malloc(KV_FLASH_SIZE);
-	if (kv == NULL)
-		return;
-
-	memset(key, '\0', sizeof(key));
-	r = kv_read(kv, 0);
-	if (r == 2 && get_virtual_cpukey(key) == 0)
-		r = kv_read(kv, 1);
-
-	if (r == 0 && kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, buf, &n, kv) == 0)
-	{
-		for (i = 0; i < 0x0C; i++)
-			if (buf[i] < '0' || buf[i] > '9')
-				break;
-
-		if (i == 0x0C) /* all digits, so it decodes */
-		{
-			memcpy(consoleSerial, buf, 0x0C);
-			consoleSerial[0x0C] = '\0';
-		}
-	}
-
-	free(kv);
-}
-
 static int serial_year(void)
 {
 	if (!consoleSerial[0])
@@ -1065,7 +1025,7 @@ static void print_console_keys(void)
 	unsigned char key[0x10];
 	unsigned char region[0x02];
 	unsigned char *kv;
-	int n, r;
+	int n, r, type;
 
 	printf("\n");
 
@@ -1122,7 +1082,25 @@ static void print_console_keys(void)
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
 		print_key("   * DVD Key", key);
 
-	/* read earlier for the GPU name; show what it decodes to while we're here */
+	/* Take the serial out of the buffer we already decrypted rather than
+	 * reading the keyvault a second time. It dates the board, which is what
+	 * separates Jasper from Tonasket. */
+	n = 0x0C;
+	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
+	{
+		int d;
+
+		for (d = 0; d < 0x0C; d++)
+			if (key[d] < '0' || key[d] > '9')
+				break;
+
+		if (d == 0x0C)
+		{
+			memcpy(consoleSerial, key, 0x0C);
+			consoleSerial[0x0C] = '\0';
+		}
+	}
+
 	if (consoleSerial[0])
 	{
 		const char *factory = serial_factory();
@@ -1134,6 +1112,15 @@ static void print_console_keys(void)
 			printf(", %s", factory);
 
 		printf(")\n");
+
+		/* the board name the serial resolves, which libxenon can't tell apart */
+		type = xenon_get_console_type();
+
+		if (type == REV_JASPER)
+			printf("   * Board: %s - %s\n",
+				jasper_variant(0), jasper_variant(1));
+		else if (*gpu_underfill(type))
+			printf("   * GPU underfill: %s\n", gpu_underfill(type) + 2);
 	}
 	else
 		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
@@ -1276,10 +1263,6 @@ int main(){
 
 	xenon_config_init();
 
-	/* before anything is printed - the console type line needs the build date
-	 * out of the serial to name a Jasper's GPU */
-	read_console_serial();
-
 	/* Everything worth writing down is readable as soon as the NAND is up, so
 	 * print it before we go anywhere near the network - no waiting on a DHCP
 	 * server to see your fuses, cpu key, serial and dvd key. */
@@ -1306,14 +1289,15 @@ int main(){
 	/* bottom aligned to the text baseline at row 11 */
 	draw_msmark(0, procRow * 16 + 1);
 
+	/* What libxenon can tell on its own. The finer split - Jasper vs Tonasket,
+	 * and whether a Y1 or Rhea shipped with the fixed underfill - needs the
+	 * build date out of the serial, so it's reported with the keys below
+	 * rather than reading the keyvault this early in boot. */
 	if (consoleType >= 0 && consoleType <= 8)
-		printf("Console Type: %s - %s (%dnm%s)\n",
-			 (consoleType == REV_JASPER) ? jasper_variant(0)
-						     : consoleNames[consoleType],
-			 (consoleType == REV_JASPER) ? jasper_variant(1)
-						     : gpuNames[consoleType],
-			 dieNodes[consoleType].gpu,
-			 gpu_underfill(consoleType));
+		printf("Console Type: %s - %s (%dnm)\n",
+			 consoleNames[consoleType],
+			 gpuNames[consoleType],
+			 dieNodes[consoleType].gpu);
 	else
 		printf("Console Type: Unknown (PVR %08x)\n", mfspr(287));
 
