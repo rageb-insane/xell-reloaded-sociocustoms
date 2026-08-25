@@ -566,17 +566,25 @@ static int edram_idle(void)
 static int edram_probe_id(uint32_t *out)
 {
 	uint32_t res;
+	int pass;
 
 	if (!edram_idle())
 		return 0;
 
-	xenos_write32(0x3c44, 0x2000);
-	if (!edram_idle())
-		return 0;
+	/* Latch and read twice, discarding the first result, exactly as
+	 * libxenon's edram_read() does. That pattern is there because the port
+	 * is pipelined - a single read hands back the previous value, not the
+	 * one just addressed. */
+	for (pass = 0; pass < 2; pass++)
+	{
+		xenos_write32(0x3c44, 0x2000);
+		if (!edram_idle())
+			return 0;
 
-	res = xenos_read32(0x3c48);
-	if (!edram_idle())
-		return 0;
+		res = xenos_read32(0x3c48);
+		if (!edram_idle())
+			return 0;
+	}
 
 	*out = res;
 	return 1;
