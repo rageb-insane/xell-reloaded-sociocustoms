@@ -588,6 +588,29 @@ static const char *av_region_name(int region)
 	return "Invalid";
 }
 
+#define SMC_QUERY_VERSION 0x12
+
+static const char *smc_version(void)
+{
+	static char text[16];
+	unsigned char msg[16];
+
+	memset(msg, 0, sizeof(msg));
+	msg[0] = SMC_QUERY_VERSION;
+
+	xenon_smc_send_message(msg);
+	xenon_smc_receive_response(msg);
+
+	if (msg[1] >= 1 && msg[1] <= 9)
+		sprintf(text, "%u.%02u", msg[1], msg[2]);
+	else if (msg[2] >= 1 && msg[2] <= 9)
+		sprintf(text, "%u.%02u", msg[2], msg[3]);
+	else
+		return NULL;
+
+	return text;
+}
+
 static const char *nand_type_name(int meta_type)
 {
 	switch (meta_type)
@@ -1833,8 +1856,17 @@ int main(){
 			xenon_get_ram_size() / 1024, die_node(consoleType, 2));
 
 	if (sfc.initialized == SFCX_INITIALIZED)
-		printf("   NAND: %dMB (%s)\n",
+	{
+		const char *smc = smc_version();
+
+		printf("   NAND: %dMB (%s)",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
+
+		if (smc)
+			printf("   SMC: %s", smc);
+
+		printf("\n");
+	}
 
 	{
 		int avpack = xenon_smc_read_avpack();
