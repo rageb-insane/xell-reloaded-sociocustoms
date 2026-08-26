@@ -1582,9 +1582,9 @@ int main(){
 	draw_msmark(8, procRow * 16 + 1);
 
 	if (is_elpis())
-		printf("   Console: Xenon - Elpis (80nm)\n");
+		printf("   Console: Xenon - Elpis (80nm)");
 	else if (consoleType >= 0 && consoleType <= 8)
-		printf("   Console: %s - %s (%dnm%s)\n",
+		printf("   Console: %s - %s (%dnm%s)",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
 						     : consoleNames[consoleType],
 			 (consoleType == REV_JASPER) ? jasper_variant(1)
@@ -1592,7 +1592,19 @@ int main(){
 			 dieNodes[consoleType].gpu,
 			 gpu_underfill(consoleType));
 	else
-		printf("   Console: Unknown (PVR %08x)\n", mfspr(287));
+		printf("   Console: Unknown (PVR %08x)", mfspr(287));
+
+	{
+		const char *method = exploit_method();
+
+		if (method)
+		{
+			printf(" - ");
+			print_coloured(CONSOLE_WARN, method);
+		}
+	}
+
+	printf("\n");
 
 	printf("\n");
 
@@ -1621,18 +1633,9 @@ int main(){
 	}
 
 	{
-		const char *method = exploit_method();
-
-		printf("\n   * LDV: CB %d / CF-CG %d",
+		printf("\n   * LDV: CB %d / CF-CG %d\n",
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
-		if (method)
-		{
-			printf(" - ");
-			print_coloured(CONSOLE_WARN, method);
-		}
-
-		printf("\n");
 		print_bootloaders();
 	}
 
