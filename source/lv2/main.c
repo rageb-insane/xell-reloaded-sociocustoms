@@ -994,16 +994,41 @@ static const char *cb_version(void)
 
 #define VFUSES_JTAG_OFFSET 0x95000
 #define VFUSES_LEN         0x60
+#define PATCH_SLOTS_MAX    8
 
 static const char *exploit_method(void)
 {
 	static const unsigned char fuseline0[8] =
 		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 	unsigned char buf[VFUSES_LEN];
+	uint32_t slot_offset, slot_size;
+	uint16_t slot_count;
+	int i;
 
 	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
 	    memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-		return "JTAG image";
+		return "JTAG";
+
+	if (xenon_get_logical_nand_data(&slot_offset, 0x64, sizeof(slot_offset)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_count, 0x68, sizeof(slot_count)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_size, 0x70, sizeof(slot_size)) == -1)
+		return NULL;
+
+	if (slot_size == 0)
+		slot_size = 0x10000;
+
+	if (slot_count > PATCH_SLOTS_MAX)
+		slot_count = PATCH_SLOTS_MAX;
+
+	for (i = 0; i < (int)slot_count; i++)
+	{
+		if (xenon_get_logical_nand_data(buf, slot_offset + i * slot_size,
+						VFUSES_LEN) == -1)
+			return NULL;
+
+		if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
+			return "RGH";
+	}
 
 	return NULL;
 }
