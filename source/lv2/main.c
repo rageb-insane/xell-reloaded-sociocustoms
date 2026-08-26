@@ -798,6 +798,68 @@ static int security_sector_present(void)
 
 #define SECTORS_PER_GB 1953125
 
+#define HEALTH_UNKNOWN 0
+#define HEALTH_OK      1
+#define HEALTH_FAILING 2
+
+#define SMART_TIMEOUT_MSEC 2000
+#define SMART_RETURN_STATUS 0xDA
+#define ATA_CMD_SMART       0xB0
+
+static void ata_reg_write(int reg, uint8_t val)
+{
+	*(volatile uint8_t *)(ata.ioaddress + reg) = val;
+}
+
+static uint8_t ata_reg_read(int reg)
+{
+	return *(volatile uint8_t *)(ata.ioaddress + reg);
+}
+
+static int ata_wait_not_busy(void)
+{
+	uint64_t t = mftb();
+
+	while (ata_reg_read(XENON_ATA_REG_STATUS) & 0x80)
+		if (tb_diff_msec(mftb(), t) > SMART_TIMEOUT_MSEC)
+			return 0;
+
+	return 1;
+}
+
+static int drive_health(void)
+{
+	uint8_t mid, high;
+
+	if (!ata.ioaddress || !ata_wait_not_busy())
+		return HEALTH_UNKNOWN;
+
+	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_RETURN_STATUS);
+	ata_reg_write(XENON_ATA_REG_SECTORS, 0);
+	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+
+	if (!ata_wait_not_busy())
+		return HEALTH_UNKNOWN;
+
+	if (ata_reg_read(XENON_ATA_REG_STATUS) & 0x01)
+		return HEALTH_UNKNOWN;
+
+	mid  = ata_reg_read(XENON_ATA_REG_LBAMID);
+	high = ata_reg_read(XENON_ATA_REG_LBAHIGH);
+
+	if (mid == 0x4F && high == 0xC2)
+		return HEALTH_OK;
+
+	if (mid == 0xF4 && high == 0x2C)
+		return HEALTH_FAILING;
+
+	return HEALTH_UNKNOWN;
+}
+
 static const char *drive_name(struct xenon_ata_device *dev)
 {
 	static const char *const brands[][2] =
@@ -870,9 +932,62 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 			print_coloured(CONSOLE_SUCCESS, "Security Sector");
 		else
 			print_coloured(COLOUR_DIM, "No Security Sector");
+
+		switch (drive_health())
+		{
+		case HEALTH_OK:
+			printf(", ");
+			print_coloured(CONSOLE_SUCCESS, "SMART OK");
+			break;
+		case HEALTH_FAILING:
+			printf(", ");
+			print_coloured(CONSOLE_ERR, "SMART FAILING");
+			break;
+		}
 	}
 
 	printf("\n");
+}
+
+#define VFUSES_JTAG_OFFSET 0x95000
+#define VFUSES_LEN         0x60
+#define PATCH_SLOTS_MAX    8
+
+static const char *exploit_method(void)
+{
+	static const unsigned char fuseline0[8] =
+		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+	unsigned char buf[VFUSES_LEN];
+	uint32_t slot_offset, slot_size;
+	uint16_t slot_count;
+	int i;
+
+	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
+	    memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
+		return "JTAG";
+
+	if (xenon_get_logical_nand_data(&slot_offset, 0x64, sizeof(slot_offset)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_count, 0x68, sizeof(slot_count)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_size, 0x70, sizeof(slot_size)) == -1)
+		return NULL;
+
+	if (slot_size == 0)
+		slot_size = 0x10000;
+
+	if (slot_count > PATCH_SLOTS_MAX)
+		slot_count = PATCH_SLOTS_MAX;
+
+	for (i = 0; i < (int)slot_count; i++)
+	{
+		if (xenon_get_logical_nand_data(buf, slot_offset + i * slot_size,
+						VFUSES_LEN) == -1)
+			return NULL;
+
+		if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
+			return "Glitch/RGH";
+	}
+
+	return NULL;
 }
 
 static void print_key_green(char *name, unsigned char *data)
@@ -994,7 +1109,22 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-		print_key("   * Virtual CPU Key", key);
+	{
+		const char *method = exploit_method();
+		int n;
+
+		printf("   * Virtual CPU Key: ");
+		for (n = 0; n < 16; n++)
+			printf("%02X", key[n]);
+
+		if (method)
+		{
+			printf("  ");
+			print_coloured(CONSOLE_WARN, method);
+		}
+
+		printf("\n");
+	}
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
