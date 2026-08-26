@@ -1100,21 +1100,51 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 #define CB_HEADER_OFFSET 0x8000
 
-static const char *cb_version(void)
+#define BL_CHAIN_MAX  8
+#define BL_SIZE_MIN   0x10
+#define BL_SIZE_MAX   0x400000
+#define BL_WALK_LIMIT 0x800000
+
+static void print_bootloaders(void)
 {
-	static char buf[24];
-	unsigned char hdr[4];
+	unsigned char hdr[0x10];
+	uint32_t off = CB_HEADER_OFFSET;
+	int n, shown = 0;
 
-	if (xenon_get_logical_nand_data(hdr, CB_HEADER_OFFSET, sizeof(hdr)) == -1)
-		return NULL;
+	if (xenon_logical_nand_data_ok() != 0)
+		return;
 
-	if (hdr[0] < 'A' || hdr[0] > 'Z' || hdr[1] < 'A' || hdr[1] > 'Z')
-		return NULL;
+	for (n = 0; n < BL_CHAIN_MAX; n++)
+	{
+		uint32_t size;
 
-	sprintf(buf, "%c%c Version %u", hdr[0], hdr[1],
-		(unsigned int)((hdr[2] << 8) | hdr[3]));
+		if (xenon_get_logical_nand_data(hdr, off, sizeof(hdr)) == -1)
+			break;
 
-	return buf;
+		if (hdr[0] < 'A' || hdr[0] > 'Z' || hdr[1] < 'A' || hdr[1] > 'Z')
+			break;
+
+		if (!shown)
+			printf("   * Bootloaders:");
+
+		printf("  %c%c %u", hdr[0], hdr[1],
+			(unsigned int)((hdr[2] << 8) | hdr[3]));
+		shown++;
+
+		size = ((uint32_t)hdr[0x0C] << 24) | ((uint32_t)hdr[0x0D] << 16) |
+		       ((uint32_t)hdr[0x0E] <<  8) |  (uint32_t)hdr[0x0F];
+
+		if (size < BL_SIZE_MIN || size > BL_SIZE_MAX)
+			break;
+
+		off += size;
+
+		if (off >= BL_WALK_LIMIT)
+			break;
+	}
+
+	if (shown)
+		printf("\n");
 }
 
 #define VFUSES_JTAG_OFFSET 0x95000
@@ -1526,15 +1556,10 @@ int main(){
 	}
 
 	{
-		const char *cb = cb_version();
-
 		const char *method = exploit_method();
 
 		printf("\n   * LDV: CB %d / CF-CG %d",
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
-
-		if (cb)
-			printf(" - %s", cb);
 
 		if (method)
 		{
@@ -1543,6 +1568,7 @@ int main(){
 		}
 
 		printf("\n");
+		print_bootloaders();
 	}
 
 	print_console_keys();
