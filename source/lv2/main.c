@@ -994,43 +994,23 @@ static const char *cb_version(void)
 
 #define VFUSES_JTAG_OFFSET 0x95000
 #define VFUSES_LEN         0x60
-#define PATCH_SLOTS_MAX    8
 
 static const char *exploit_method(void)
 {
 	static const unsigned char fuseline0[8] =
 		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 	unsigned char buf[VFUSES_LEN];
-	uint32_t slot_offset, slot_size;
-	uint16_t slot_count;
-	int i;
 
-	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
-	    memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-		return "JTAG";
-
-	if (xenon_get_logical_nand_data(&slot_offset, 0x64, sizeof(slot_offset)) == -1 ||
-	    xenon_get_logical_nand_data(&slot_count, 0x68, sizeof(slot_count)) == -1 ||
-	    xenon_get_logical_nand_data(&slot_size, 0x70, sizeof(slot_size)) == -1)
+	if (xenon_logical_nand_data_ok() != 0)
 		return NULL;
 
-	if (slot_size == 0)
-		slot_size = 0x10000;
+	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) == -1)
+		return NULL;
 
-	if (slot_count > PATCH_SLOTS_MAX)
-		slot_count = PATCH_SLOTS_MAX;
+	if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
+		return "JTAG";
 
-	for (i = 0; i < (int)slot_count; i++)
-	{
-		if (xenon_get_logical_nand_data(buf, slot_offset + i * slot_size,
-						VFUSES_LEN) == -1)
-			return NULL;
-
-		if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-			return "RGH";
-	}
-
-	return NULL;
+	return "RGH";
 }
 
 static void print_key_green(char *name, unsigned char *data, const char *suffix)
@@ -1165,22 +1145,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-	{
-		const char *method = exploit_method();
-		int n;
-
-		printf("   * Virtual CPU Key: ");
-		for (n = 0; n < 16; n++)
-			printf("%02X", key[n]);
-
-		if (method)
-		{
-			printf("  ");
-			print_coloured(CONSOLE_WARN, method);
-		}
-
-		printf("\n");
-	}
+		print_key("   * Virtual CPU Key", key);
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
@@ -1428,11 +1393,19 @@ int main(){
 	{
 		const char *cb = cb_version();
 
+		const char *method = exploit_method();
+
 		printf("\n   * LDV: CB %d / CF-CG %d",
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
 		if (cb)
 			printf(" - %s", cb);
+
+		if (method)
+		{
+			printf(" - ");
+			print_coloured(CONSOLE_WARN, method);
+		}
 
 		printf("\n");
 	}
