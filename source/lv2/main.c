@@ -1013,7 +1013,14 @@ int main(){
 	console_clrscr();
 	redraw_logo();
 
-	printf("XeLL git-" GITREV " - (C) 2007-2026 LibXenon.org, Free60.org\n\n");
+	if (panel_fits())
+		printf("XeLL git-" GITREV " - (C) 2007-2026 LibXenon.org, Free60.org\n\n");
+	else
+	{
+		printf("SocioCustoms ");
+		print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
+		printf(" - XeLL git-" GITREV " - LibXenon.org, Free60.org\n\n");
+	}
 
 	console_close();
 	printf("XeLL - Xenon linux loader second stage " LONGVERSION "\n");
