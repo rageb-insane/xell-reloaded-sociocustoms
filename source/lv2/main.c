@@ -403,6 +403,20 @@ static const char *die_node(int type, int which)
 
 #define XENOS_ID_ELPIS 0x5821
 
+#define CPUKEY_FUSE_FIRST 3
+#define CPUKEY_FUSE_LAST  6
+
+static int zero_fuse(void)
+{
+	int i;
+
+	for (i = CPUKEY_FUSE_FIRST; i <= CPUKEY_FUSE_LAST; i++)
+		if (xenon_secotp_read_line(i) != 0)
+			return 0;
+
+	return 1;
+}
+
 static int is_elpis(void)
 {
 	return xenon_get_console_type() == REV_XENON &&
@@ -1398,7 +1412,7 @@ static const char *exploit_method(void)
 	return "RGH";
 }
 
-static void print_key_green(char *name, unsigned char *data, const char *suffix)
+static void print_key_green(char *name, unsigned char *data)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
 	int i;
@@ -1409,12 +1423,6 @@ static void print_key_green(char *name, unsigned char *data, const char *suffix)
 	for (i = 0; i < 16; i++)
 		printf("%02X", data[i]);
 	console_set_colors(bg, fg);
-
-	if (suffix)
-	{
-		printf("  ");
-		print_coloured(CONSOLE_WARN, suffix);
-	}
 
 	printf("\n");
 }
@@ -1497,20 +1505,13 @@ static void print_console_keys(void)
 	unsigned char key[0x10];
 	unsigned char region[0x02];
 	unsigned char *kv;
-	int n, r, zerofuse = 0;
+	int n, r;
 
 	printf("\n");
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
-	{
-		for (n = 0; n < (int)sizeof(key) && key[n] == 0; n++)
-			;
-
-		zerofuse = (n == (int)sizeof(key));
-
-		print_key_green("   * CPU Key", key, zerofuse ? "Zero Fuse" : NULL);
-	}
+		print_key_green("   * CPU Key", key);
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -1766,6 +1767,12 @@ int main(){
 		{
 			print_sep();
 			print_coloured(CONSOLE_WARN, method);
+		}
+
+		if (zero_fuse())
+		{
+			print_sep();
+			print_coloured(CONSOLE_WARN, "Zero Fuse");
 		}
 	}
 
