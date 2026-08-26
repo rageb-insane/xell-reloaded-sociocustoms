@@ -796,6 +796,57 @@ static int security_sector_present(void)
 	return strcmp(plain, model) == 0 || strcmp(swapped, model) == 0;
 }
 
+#define SECTORS_PER_GB 1953125
+
+static const char *drive_name(struct xenon_ata_device *dev)
+{
+	static const char *const brands[][2] =
+	{
+		{ "PLDS",     "Philips/Lite-On" },
+		{ "Lite-On",  "Lite-On"         },
+		{ "LITE-ON",  "Lite-On"         },
+		{ "LITEON",   "Lite-On"         },
+		{ "TSSTcorp", "Toshiba/Samsung" },
+		{ "TSSTCORP", "Toshiba/Samsung" },
+		{ "HL-DT-ST", "Hitachi/LG"      },
+		{ "HITACHI",  "Hitachi"         },
+		{ "SAMSUNG",  "Samsung"         },
+		{ "TOSHIBA",  "Toshiba"         },
+		{ "PHILIPS",  "Philips"         },
+		{ "BENQ",     "BenQ"            },
+		{ "BenQ",     "BenQ"            },
+	};
+	static char buf[sizeof(dev->model) + 24];
+	char model[sizeof(dev->model) + 1];
+	const char *rest;
+	unsigned int i;
+
+	strcpy(model, ata_model(dev));
+
+	for (i = 0; i < sizeof(brands) / sizeof(brands[0]); i++)
+	{
+		size_t n = strlen(brands[i][0]);
+
+		if (strncmp(model, brands[i][0], n))
+			continue;
+
+		rest = model + n;
+		while (*rest == ' ')
+			rest++;
+
+		if (*rest)
+			sprintf(buf, "%s %s", brands[i][1], rest);
+		else
+			strcpy(buf, brands[i][1]);
+
+		return buf;
+	}
+
+	strcpy(buf, model);
+
+	return buf;
+}
+
 static void detect_line(const char *label, int present, struct xenon_ata_device *dev)
 {
 	printf("   %s... ", label);
@@ -807,10 +858,13 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 		return;
 	}
 
-	printf("%s", ata_model(dev));
+	printf("%s", drive_name(dev));
 
 	if (dev == &ata)
 	{
+		if (dev->size >= SECTORS_PER_GB)
+			printf(" %uGB", dev->size / SECTORS_PER_GB);
+
 		printf(" - ");
 		if (security_sector_present())
 			print_coloured(CONSOLE_SUCCESS, "Security Sector");
