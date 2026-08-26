@@ -179,8 +179,6 @@ void draw_logo()
 static void draw_discord(void);
 static void draw_temperatures(void);
 
-static int screen_scrolled;
-
 static void redraw_logo(void)
 {
 	unsigned int bg, r0, g0, b0, x, y;
@@ -210,9 +208,6 @@ static void keep_logo_in_place(void)
 	int max_y = console_get_cursor_max_y();
 	int y = console_get_cursor_y();
 
-	if (last_y >= 0 && y < last_y)
-		screen_scrolled = 1;
-
 	if (last_y >= 0 && y != last_y && (y < last_y || y >= max_y - 3))
 		redraw_logo();
 
@@ -220,15 +215,36 @@ static void keep_logo_in_place(void)
 }
 
 static void print_coloured(unsigned int colour, const char *s);
+static void status_line(const char *label, const char *state, unsigned int colour);
 
 static int netstatus_row = -1;
+static int netstatus_last = -1;
+
+static void netstatus_anchor(void)
+{
+	netstatus_row = console_get_cursor_y();
+	netstatus_last = netstatus_row;
+}
+
+static void netstatus_track(void)
+{
+	int y = console_get_cursor_y();
+
+	if (netstatus_row >= 0 && netstatus_last >= 0 && y <= netstatus_last)
+		netstatus_row -= netstatus_last + 1 - y;
+
+	netstatus_last = y;
+}
 
 static void set_network_status(const char *state, unsigned int colour)
 {
 	int x, y, i;
 
-	if (netstatus_row < 0 || screen_scrolled)
+	if (netstatus_row < 0)
+	{
+		status_line("Network init", state, colour);
 		return;
+	}
 
 	x = console_get_cursor_x();
 	y = console_get_cursor_y();
@@ -443,6 +459,7 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("   %s... ", label);
 	print_coloured(colour, state);
 	printf("\n");
+	netstatus_track();
 }
 
 static char consoleSerial[13];
@@ -1199,7 +1216,7 @@ int main(){
 	}
 
 #ifndef NO_NETWORKING
-	netstatus_row = console_get_cursor_y();
+	netstatus_anchor();
 
 	if (netif.ip_addr.addr)
 		status_line("Network init", "DHCP lease acquired", CONSOLE_SUCCESS);
