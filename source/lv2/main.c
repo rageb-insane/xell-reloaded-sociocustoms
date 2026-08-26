@@ -953,7 +953,7 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 #define VFUSES_LEN         0x60
 #define PATCH_SLOTS_MAX    8
 
-static const char *exploit_method(void)
+static const char *exploit_method(int zerofuse)
 {
 	static const unsigned char fuseline0[8] =
 		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -962,9 +962,12 @@ static const char *exploit_method(void)
 	uint16_t slot_count;
 	int i;
 
+	if (zerofuse)
+		return "Zero Fuse";
+
 	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
 	    memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-		return "JTAG";
+		return "JTAG image";
 
 	if (xenon_get_logical_nand_data(&slot_offset, 0x64, sizeof(slot_offset)) == -1 ||
 	    xenon_get_logical_nand_data(&slot_count, 0x68, sizeof(slot_count)) == -1 ||
@@ -984,7 +987,7 @@ static const char *exploit_method(void)
 			return NULL;
 
 		if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-			return "Glitch/RGH";
+			return "Glitch image";
 	}
 
 	return NULL;
@@ -1083,13 +1086,20 @@ static void print_console_keys(void)
 	unsigned char key[0x10];
 	unsigned char region[0x02];
 	unsigned char *kv;
-	int n, r;
+	int n, r, zerofuse = 0;
 
 	printf("\n");
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
+	{
 		print_key_green("   * CPU Key", key);
+
+		for (n = 0; n < (int)sizeof(key) && key[n] == 0; n++)
+			;
+
+		zerofuse = (n == (int)sizeof(key));
+	}
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -1110,7 +1120,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
 	{
-		const char *method = exploit_method();
+		const char *method = exploit_method(zerofuse);
 		int n;
 
 		printf("   * Virtual CPU Key: ");
