@@ -972,7 +972,7 @@ static const char *cb_version(void)
 #define VFUSES_LEN         0x60
 #define PATCH_SLOTS_MAX    8
 
-static const char *exploit_method(int zerofuse)
+static const char *exploit_method(void)
 {
 	static const unsigned char fuseline0[8] =
 		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -980,9 +980,6 @@ static const char *exploit_method(int zerofuse)
 	uint32_t slot_offset, slot_size;
 	uint16_t slot_count;
 	int i;
-
-	if (zerofuse)
-		return "Zero Fuse";
 
 	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
 	    memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
@@ -1012,7 +1009,7 @@ static const char *exploit_method(int zerofuse)
 	return NULL;
 }
 
-static void print_key_green(char *name, unsigned char *data)
+static void print_key_green(char *name, unsigned char *data, const char *suffix)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
 	int i;
@@ -1023,6 +1020,12 @@ static void print_key_green(char *name, unsigned char *data)
 	for (i = 0; i < 16; i++)
 		printf("%02X", data[i]);
 	console_set_colors(bg, fg);
+
+	if (suffix)
+	{
+		printf("  ");
+		print_coloured(CONSOLE_WARN, suffix);
+	}
 
 	printf("\n");
 }
@@ -1112,12 +1115,12 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
 	{
-		print_key_green("   * CPU Key", key);
-
 		for (n = 0; n < (int)sizeof(key) && key[n] == 0; n++)
 			;
 
 		zerofuse = (n == (int)sizeof(key));
+
+		print_key_green("   * CPU Key", key, zerofuse ? "Zero Fuse" : NULL);
 	}
 
 	if (xenon_logical_nand_data_ok() != 0)
@@ -1139,7 +1142,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
 	{
-		const char *method = exploit_method(zerofuse);
+		const char *method = exploit_method();
 		int n;
 
 		printf("   * Virtual CPU Key: ");
@@ -1348,39 +1351,6 @@ int main(){
 
 	printf("\n");
 
-	procRow = console_get_cursor_y();
-
-	printf("  Microsoft %s%s %08x %u.%03uGHz Processor\n",
-			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
-			 die_node(consoleType, 0),
-			 mfspr(287),
-			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
-			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
-
-	draw_msmark(0, procRow * 16 + 1);
-
-	printf("GPU ID: %04x rev %02x   PCI Bridge: %02x   DVE: %02x   Video: %ux%u%s\n",
-			 xenon_get_XenosID(),
-			 xenos_revision(),
-			 xenon_get_PCIBridgeRevisionID(),
-			 xenon_get_DVE(),
-			 (unsigned int)ATI_INFO->width,
-			 (unsigned int)ATI_INFO->height,
-			 xenos_is_overscan() ? " overscan" : "");
-
-	{
-		int avpack = xenon_smc_read_avpack();
-		const char *avname = avpack_name(avpack);
-
-		printf("AV Region: %s   AV Pack: ",
-			 av_region_name(xenon_config_get_avregion()));
-
-		if (avname)
-			printf("%s\n\n", avname);
-		else
-			printf("%02X\n\n", avpack);
-	}
-
 #ifndef NO_PRINT_CONFIG
 	printf("Fuses:\n");
 	u64 fuseline[12];
@@ -1449,6 +1419,17 @@ int main(){
 
 	console_open();
 
+	procRow = console_get_cursor_y();
+
+	printf("   Microsoft %s%s %08x %u.%03uGHz Processor\n",
+			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
+			 die_node(consoleType, 0),
+			 mfspr(287),
+			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
+			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
+
+	draw_msmark(8, procRow * 16 + 1);
+
 	if (consoleType >= 0 && consoleType <= 8)
 		printf("   Console: %s - %s (%dnm%s)\n",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
@@ -1460,6 +1441,15 @@ int main(){
 	else
 		printf("   Console: Unknown (PVR %08x)\n", mfspr(287));
 
+	printf("   GPU ID: %04x rev %02x  PCI Bridge: %02x  DVE: %02x  Video: %ux%u%s\n",
+			 xenon_get_XenosID(),
+			 xenos_revision(),
+			 xenon_get_PCIBridgeRevisionID(),
+			 xenon_get_DVE(),
+			 (unsigned int)ATI_INFO->width,
+			 (unsigned int)ATI_INFO->height,
+			 xenos_is_overscan() ? " overscan" : "");
+
 	if (consoleType == REV_JASPER)
 		printf("   Memory: %uK   eDRAM: 10MB (%s)\n",
 			xenon_get_ram_size() / 1024, jasper_variant(2));
@@ -1470,6 +1460,19 @@ int main(){
 	if (sfc.initialized == SFCX_INITIALIZED)
 		printf("   NAND: %dMB (%s)\n",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
+
+	{
+		int avpack = xenon_smc_read_avpack();
+		const char *avname = avpack_name(avpack);
+
+		printf("   AV Region: %s   AV Pack: ",
+			 av_region_name(xenon_config_get_avregion()));
+
+		if (avname)
+			printf("%s\n", avname);
+		else
+			printf("%02X\n", avpack);
+	}
 
 	if (panel_fits())
 		draw_temperatures();
