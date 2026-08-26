@@ -759,20 +759,6 @@ static const char *ata_model(struct xenon_ata_device *dev)
 	return buf;
 }
 
-static const char *ata_rev(struct xenon_ata_device *dev)
-{
-	static char buf[sizeof(dev->rev) + 1];
-	int n;
-
-	memcpy(buf, dev->rev, sizeof(dev->rev));
-	buf[sizeof(dev->rev)] = '\0';
-
-	for (n = strlen(buf) - 1; n >= 0 && buf[n] == ' '; n--)
-		buf[n] = '\0';
-
-	return buf;
-}
-
 #define SECURITY_SECTOR_LBA 16
 #define SS_MODEL_OFF        0x1C
 #define SS_MODEL_LEN        40
@@ -821,9 +807,6 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 	}
 
 	printf("%s", ata_model(dev));
-
-	if (ata_rev(dev)[0])
-		printf(" (%s)", ata_rev(dev));
 
 	if (dev == &ata)
 	{
