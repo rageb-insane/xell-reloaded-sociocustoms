@@ -1439,7 +1439,7 @@ int main(){
 	draw_msmark(8, procRow * 16 + 1);
 
 	if (is_elpis())
-		printf("   Console: Xenon Elpis (80nm)\n");
+		printf("   Console: Xenon - Elpis (80nm)\n");
 	else if (consoleType >= 0 && consoleType <= 8)
 		printf("   Console: %s - %s (%dnm%s)\n",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
