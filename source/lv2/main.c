@@ -823,6 +823,19 @@ static int ata_wait_not_busy(void)
 #define SMART_ATTR_REALLOC 5
 #define SMART_ATTR_HOURS   9
 #define SMART_ATTR_COUNT   30
+#define HOURS_MID          5000
+#define HOURS_HIGH         15000
+
+static unsigned int hours_colour(uint32_t hours)
+{
+	if (hours >= HOURS_HIGH)
+		return CONSOLE_COLOR_ORANGE;
+
+	if (hours >= HOURS_MID)
+		return CONSOLE_WARN;
+
+	return console_color[1];
+}
 
 static int ata_wait_drq(void)
 {
@@ -942,7 +955,10 @@ static void print_smart_wear(void)
 	printf("      ");
 
 	if (have_hours)
-		printf("%u hours", hours);
+	{
+		sprintf(text, "%u hours", hours);
+		print_coloured(hours_colour(hours), text);
+	}
 
 	if (have_hours && have_bad)
 		printf(", ");
@@ -1105,14 +1121,34 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 #define BL_SIZE_MAX   0x400000
 #define BL_WALK_LIMIT 0x800000
 
-static void print_bootloaders(void)
+#define BL_STAGE_2BL  2
+#define CB_X_RGH13    42069
+
+struct bl_chain
 {
+	int count;
+	int cb_count;
+	unsigned int cb_x;
+	unsigned char magic[BL_CHAIN_MAX][2];
+	unsigned int build[BL_CHAIN_MAX];
+};
+
+static const struct bl_chain *bootloaders(void)
+{
+	static struct bl_chain chain;
+	static int scanned;
+	unsigned int cb_build[BL_CHAIN_MAX];
 	unsigned char hdr[0x10];
 	uint32_t off = CB_HEADER_OFFSET;
-	int n, shown = 0;
+	int n;
+
+	if (scanned)
+		return &chain;
+
+	scanned = 1;
 
 	if (xenon_logical_nand_data_ok() != 0)
-		return;
+		return &chain;
 
 	for (n = 0; n < BL_CHAIN_MAX; n++)
 	{
@@ -1124,15 +1160,19 @@ static void print_bootloaders(void)
 		if (hdr[0] < 'A' || hdr[0] > 'Z' || hdr[1] < 'A' || hdr[1] > 'Z')
 			break;
 
-		if (!shown)
-			printf("   * Bootloaders:");
+		chain.magic[chain.count][0] = hdr[0];
+		chain.magic[chain.count][1] = hdr[1];
+		chain.build[chain.count] = (unsigned int)((hdr[2] << 8) | hdr[3]);
 
-		printf("  %c%c %u", hdr[0], hdr[1],
-			(unsigned int)((hdr[2] << 8) | hdr[3]));
-		shown++;
+		if ((hdr[1] & 0x0F) == BL_STAGE_2BL)
+			cb_build[chain.cb_count++] = chain.build[chain.count];
+
+		chain.count++;
 
 		size = ((uint32_t)hdr[0x0C] << 24) | ((uint32_t)hdr[0x0D] << 16) |
 		       ((uint32_t)hdr[0x0E] <<  8) |  (uint32_t)hdr[0x0F];
+
+		size = (size + 0xF) & ~(uint32_t)0xF;
 
 		if (size < BL_SIZE_MIN || size > BL_SIZE_MAX)
 			break;
@@ -1143,8 +1183,26 @@ static void print_bootloaders(void)
 			break;
 	}
 
-	if (shown)
-		printf("\n");
+	if (chain.cb_count >= 3)
+		chain.cb_x = cb_build[1];
+
+	return &chain;
+}
+
+static void print_bootloaders(void)
+{
+	const struct bl_chain *bl = bootloaders();
+	int n;
+
+	if (bl->count == 0)
+		return;
+
+	printf("   * Bootloaders:");
+
+	for (n = 0; n < bl->count; n++)
+		printf("  %c%c %u", bl->magic[n][0], bl->magic[n][1], bl->build[n]);
+
+	printf("\n");
 }
 
 #define VFUSES_JTAG_OFFSET 0x95000
@@ -1155,9 +1213,16 @@ static const char *exploit_method(void)
 	static const unsigned char fuseline0[8] =
 		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 	unsigned char buf[VFUSES_LEN];
+	const struct bl_chain *bl = bootloaders();
 
 	if (xenon_logical_nand_data_ok() != 0)
 		return NULL;
+
+	if (bl->cb_x == CB_X_RGH13)
+		return "RGH 1.3";
+
+	if (bl->cb_x)
+		return "RGH3";
 
 	if (xenon_get_logical_nand_data(buf, VFUSES_JTAG_OFFSET, VFUSES_LEN) == -1)
 		return NULL;
