@@ -225,46 +225,9 @@ static void keep_logo_in_place(void)
 static void print_coloured(unsigned int colour, const char *s);
 static void status_line(const char *label, const char *state, unsigned int colour);
 
-static int netstatus_row = -1;
-static int netstatus_last = -1;
-
-static void netstatus_anchor(void)
-{
-	netstatus_row = console_get_cursor_y();
-	netstatus_last = netstatus_row;
-}
-
-static void netstatus_track(void)
-{
-	int y = console_get_cursor_y();
-
-	if (netstatus_row >= 0 && netstatus_last >= 0 && y <= netstatus_last)
-		netstatus_row -= netstatus_last + 1 - y;
-
-	netstatus_last = y;
-}
-
 static void set_network_status(const char *state, unsigned int colour)
 {
-	int x, y, i;
-
-	if (netstatus_row < 0)
-	{
-		status_line("Network init", state, colour);
-		return;
-	}
-
-	x = console_get_cursor_x();
-	y = console_get_cursor_y();
-
-	console_set_cursor(0, netstatus_row);
-	printf("   Network init... ");
-	print_coloured(colour, state);
-	for (i = strlen(state); i < 32; i++)
-		printf(" ");
-
-	console_set_cursor(x, y);
-	netstatus_row = -1;
+	status_line("Network init", state, colour);
 }
 
 static void announce_scan(void)
@@ -472,10 +435,12 @@ static void print_coloured(unsigned int colour, const char *s)
 
 static void status_line(const char *label, const char *state, unsigned int colour)
 {
+	if (colour == CONSOLE_SUCCESS)
+		return;
+
 	printf("   %s... ", label);
 	print_coloured(colour, state);
 	printf("\n");
-	netstatus_track();
 }
 
 static char consoleSerial[13];
@@ -1645,13 +1610,7 @@ int main(){
 	}
 
 #ifndef NO_NETWORKING
-	netstatus_anchor();
-
-	if (netif.ip_addr.addr)
-		status_line("Network init", "DHCP lease acquired", CONSOLE_SUCCESS);
-	else if (netStatus == NETWORK_INIT_SUCCESS)
-		status_line("Network init", "DHCP requested", CONSOLE_WARN);
-	else
+	if (!netif.ip_addr.addr && netStatus != NETWORK_INIT_SUCCESS)
 		status_line("Network init", "failed", CONSOLE_ERR);
 
 	status_line("HTTPD init", "success", CONSOLE_SUCCESS);
