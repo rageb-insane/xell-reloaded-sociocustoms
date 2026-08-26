@@ -558,6 +558,23 @@ static const char *avpack_name(int avpack)
 	return NULL;
 }
 
+static const char *game_region_name(unsigned int region)
+{
+	switch (region)
+	{
+	case 0x00FF: return "NTSC/US";
+	case 0x0101: return "NTSC/HK";
+	case 0x01FC: return "NTSC/KOR";
+	case 0x01FE:
+	case 0x01FF: return "NTSC/JAP";
+	case 0x0201: return "PAL/AUS";
+	case 0x02FE: return "PAL/EU";
+	case 0x7FFF: return "DEVKIT";
+	}
+
+	return NULL;
+}
+
 static const char *av_region_name(int region)
 {
 	switch (region)
@@ -1316,7 +1333,17 @@ static void print_console_keys(void)
 
 	n = sizeof(region);
 	if (kv_get_key(XEKEY_GAME_REGION, region, &n, kv) == 0)
-		printf("   * Game Region: %04X\n", (region[0] << 8) | region[1]);
+	{
+		unsigned int code = (region[0] << 8) | region[1];
+		const char *name = game_region_name(code);
+
+		printf("   * Game Region: %04X", code);
+
+		if (name)
+			printf(" - %s", name);
+
+		printf("\n");
+	}
 
 	free(kv);
 
