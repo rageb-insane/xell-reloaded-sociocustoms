@@ -819,7 +819,8 @@ static int ata_wait_not_busy(void)
 	return 1;
 }
 
-#define SMART_READ_DATA    0xD0
+#define SMART_READ_DATA       0xD0
+#define SMART_READ_THRESHOLDS 0xD1
 #define SMART_ATTR_REALLOC 5
 #define SMART_ATTR_HOURS   9
 #define SMART_ATTR_COUNT   30
@@ -878,7 +879,7 @@ static int smart_table_ok(const unsigned char *buf)
 	return seen >= 3;
 }
 
-static int smart_read_data(unsigned char *buf)
+static int smart_read_table(unsigned char *buf, uint8_t feature)
 {
 	int i;
 
@@ -886,7 +887,7 @@ static int smart_read_data(unsigned char *buf)
 		return 0;
 
 	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
-	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_READ_DATA);
+	ata_reg_write(XENON_ATA_REG_FEATURES, feature);
 	ata_reg_write(XENON_ATA_REG_SECTORS, 1);
 	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
 	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
@@ -934,7 +935,75 @@ static int smart_attr(const unsigned char *buf, int id, uint32_t *out)
 	return 0;
 }
 
-static void print_smart_wear(void)
+static const char *smart_attr_name(int id)
+{
+	switch (id)
+	{
+	case 1:   return "Read Error Rate";
+	case 3:   return "Spin-Up Time";
+	case 4:   return "Start/Stop Count";
+	case 5:   return "Reallocated Sectors";
+	case 7:   return "Seek Error Rate";
+	case 9:   return "Power-On Hours";
+	case 10:  return "Spin Retry Count";
+	case 11:  return "Recalibration Retries";
+	case 12:  return "Power Cycle Count";
+	case 184: return "End-to-End Error";
+	case 187: return "Reported Uncorrectable";
+	case 188: return "Command Timeout";
+	case 190: return "Airflow Temperature";
+	case 194: return "Temperature";
+	case 196: return "Reallocation Events";
+	case 197: return "Pending Sectors";
+	case 198: return "Offline Uncorrectable";
+	case 199: return "UDMA CRC Errors";
+	case 200: return "Write Error Rate";
+	}
+
+	return NULL;
+}
+
+static const char *smart_failing_attr(const unsigned char *data)
+{
+	static unsigned char thr[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
+	static char text[32];
+	int n, m;
+
+	memset(thr, 0, sizeof(thr));
+
+	if (!smart_read_table(thr, SMART_READ_THRESHOLDS))
+		return NULL;
+
+	for (n = 0; n < SMART_ATTR_COUNT; n++)
+	{
+		const unsigned char *e = data + 2 + n * 12;
+
+		if (e[0] == 0)
+			continue;
+
+		for (m = 0; m < SMART_ATTR_COUNT; m++)
+		{
+			const unsigned char *t = thr + 2 + m * 12;
+			const char *name;
+
+			if (t[0] != e[0] || t[1] == 0 || e[3] > t[1])
+				continue;
+
+			name = smart_attr_name(e[0]);
+
+			if (name)
+				return name;
+
+			sprintf(text, "attribute %d", e[0]);
+
+			return text;
+		}
+	}
+
+	return NULL;
+}
+
+static void print_smart_wear(int health)
 {
 	static unsigned char buf[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
 	uint32_t hours, bad;
@@ -943,7 +1012,7 @@ static void print_smart_wear(void)
 
 	memset(buf, 0, sizeof(buf));
 
-	if (!smart_read_data(buf))
+	if (!smart_read_table(buf, SMART_READ_DATA))
 		return;
 
 	have_hours = smart_attr(buf, SMART_ATTR_HOURS, &hours);
@@ -967,6 +1036,17 @@ static void print_smart_wear(void)
 	{
 		sprintf(text, "%u reallocated", bad);
 		print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
+	}
+
+	if (health == HEALTH_FAILING)
+	{
+		const char *why = smart_failing_attr(buf);
+
+		if (why)
+		{
+			printf(" - ");
+			print_coloured(CONSOLE_ERR, why);
+		}
 	}
 
 	printf("\n");
@@ -1111,7 +1191,7 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 	printf("\n");
 
 	if (health != HEALTH_UNKNOWN)
-		print_smart_wear();
+		print_smart_wear(health);
 }
 
 #define CB_HEADER_OFFSET 0x8000
@@ -1203,6 +1283,62 @@ static void print_bootloaders(void)
 		printf("  %c%c %u", bl->magic[n][0], bl->magic[n][1], bl->build[n]);
 
 	printf("\n");
+}
+
+#define BL_STAGE_CF      6
+#define PATCH_SLOTS_MAX  8
+#define PATCH_SCAN_LEN   0x200
+#define PATCH_SLOT_TABLE 0x64
+
+static unsigned int kernel_version(void)
+{
+	unsigned char hdr[0x10];
+	uint32_t slot_offset, slot_size;
+	uint16_t slot_count;
+	unsigned int best = 0;
+	int i, n;
+
+	if (xenon_logical_nand_data_ok() != 0)
+		return 0;
+
+	if (xenon_get_logical_nand_data(&slot_offset, PATCH_SLOT_TABLE,
+					sizeof(slot_offset)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_count, PATCH_SLOT_TABLE + 4,
+					sizeof(slot_count)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_size, PATCH_SLOT_TABLE + 12,
+					sizeof(slot_size)) == -1)
+		return 0;
+
+	if (slot_size == 0)
+		slot_size = 0x10000;
+
+	if (slot_count > PATCH_SLOTS_MAX)
+		slot_count = PATCH_SLOTS_MAX;
+
+	for (i = 0; i < (int)slot_count; i++)
+	{
+		uint32_t base = slot_offset + i * slot_size;
+
+		for (n = 0; n < PATCH_SCAN_LEN; n += 0x10)
+		{
+			unsigned int build;
+
+			if (xenon_get_logical_nand_data(hdr, base + n, sizeof(hdr)) == -1)
+				break;
+
+			if (hdr[0] != 'C' || (hdr[1] & 0x0F) != BL_STAGE_CF)
+				continue;
+
+			build = (unsigned int)((hdr[2] << 8) | hdr[3]);
+
+			if (build > best)
+				best = build;
+
+			break;
+		}
+	}
+
+	return best;
 }
 
 #define VFUSES_JTAG_OFFSET 0x95000
@@ -1633,9 +1769,15 @@ int main(){
 	}
 
 	{
-		printf("\n   * LDV: CB %d / CF-CG %d\n",
+		unsigned int kernel = kernel_version();
+
+		printf("\n   * LDV: CB %d / CF-CG %d",
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
+		if (kernel)
+			printf(" - Kernel 2.0.%u.0", kernel);
+
+		printf("\n");
 		print_bootloaders();
 	}
 
