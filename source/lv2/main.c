@@ -1394,6 +1394,9 @@ static const char *exploit_method(void)
 	unsigned char buf[VFUSES_LEN];
 	const struct bl_chain *bl = bootloaders();
 
+	if (zero_fuse())
+		return "Zero Fuse";
+
 	if (xenon_logical_nand_data_ok() != 0)
 		return NULL;
 
@@ -1767,12 +1770,6 @@ int main(){
 		{
 			print_sep();
 			print_coloured(CONSOLE_WARN, method);
-		}
-
-		if (zero_fuse())
-		{
-			print_sep();
-			print_coloured(CONSOLE_WARN, "Zero Fuse");
 		}
 	}
 
