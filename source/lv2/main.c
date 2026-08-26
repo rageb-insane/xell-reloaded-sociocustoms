@@ -438,6 +438,14 @@ static const char *die_node(int type, int which)
 	return buf;
 }
 
+#define XENOS_ID_ELPIS 0x5821
+
+static int is_elpis(void)
+{
+	return xenon_get_console_type() == REV_XENON &&
+	       xenon_get_XenosID() == XENOS_ID_ELPIS;
+}
+
 static const char *cpuNames[] =
 {
 	"Waternoose",
@@ -1430,7 +1438,9 @@ int main(){
 
 	draw_msmark(8, procRow * 16 + 1);
 
-	if (consoleType >= 0 && consoleType <= 8)
+	if (is_elpis())
+		printf("   Console: Elpis - Rhea (80nm)\n");
+	else if (consoleType >= 0 && consoleType <= 8)
 		printf("   Console: %s - %s (%dnm%s)\n",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
 						     : consoleNames[consoleType],
@@ -1453,6 +1463,9 @@ int main(){
 	if (consoleType == REV_JASPER)
 		printf("   Memory: %uK   eDRAM: 10MB (%s)\n",
 			xenon_get_ram_size() / 1024, jasper_variant(2));
+	else if (is_elpis())
+		printf("   Memory: %uK   eDRAM: 10MB (80nm)\n",
+			xenon_get_ram_size() / 1024);
 	else
 		printf("   Memory: %uK   eDRAM: 10MB%s\n",
 			xenon_get_ram_size() / 1024, die_node(consoleType, 2));
