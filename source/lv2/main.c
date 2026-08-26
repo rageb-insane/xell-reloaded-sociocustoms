@@ -167,7 +167,8 @@ void draw_logo()
 	}
 }
 
-#define DISCORD_TEXT "@socioculture"
+#define DISCORD_TEXT   "@socioculture"
+#define DISCORD_COLOUR 0xF2655800
 #define DISCORD_ROW  9
 #define TEMPS_ROW    11
 #define TEMPS_LINES  4
@@ -582,9 +583,9 @@ static const char *nand_type_name(int meta_type)
 	return "unknown";
 }
 
-#define PURPLE_R ((CONSOLE_COLOR_PURPLE >>  8) & 0xff)
-#define PURPLE_G ((CONSOLE_COLOR_PURPLE >> 16) & 0xff)
-#define PURPLE_B ((CONSOLE_COLOR_PURPLE >> 24) & 0xff)
+#define BLURPLE_R ((DISCORD_COLOUR >>  8) & 0xff)
+#define BLURPLE_G ((DISCORD_COLOUR >> 16) & 0xff)
+#define BLURPLE_B ((DISCORD_COLOUR >> 24) & 0xff)
 #define DISCORD_GAP 4
 
 static void draw_discord(void)
@@ -614,12 +615,12 @@ static void draw_discord(void)
 				continue;
 
 			blend_pset(iconx + ix, icony + iy, a,
-				   PURPLE_R, PURPLE_G, PURPLE_B);
+				   BLURPLE_R, BLURPLE_G, BLURPLE_B);
 		}
 	}
 
 	console_set_cursor(col, DISCORD_ROW);
-	print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
+	print_coloured(DISCORD_COLOUR, DISCORD_TEXT);
 
 	console_set_cursor(x, y);
 }
@@ -1018,7 +1019,7 @@ int main(){
 	else
 	{
 		printf("SocioCustoms ");
-		print_coloured(CONSOLE_COLOR_PURPLE, DISCORD_TEXT);
+		print_coloured(DISCORD_COLOUR, DISCORD_TEXT);
 		printf(" - XeLL git-" GITREV " - LibXenon.org, Free60.org\n\n");
 	}
 
