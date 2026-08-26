@@ -433,6 +433,11 @@ static void print_coloured(unsigned int colour, const char *s)
 	console_set_colors(bg, fg);
 }
 
+static void print_sep(void)
+{
+	print_coloured(COLOUR_DIM, " | ");
+}
+
 static void status_line(const char *label, const char *state, unsigned int colour)
 {
 	if (colour == CONSOLE_SUCCESS)
@@ -1067,7 +1072,7 @@ static void print_smart_wear(int health)
 
 		if (why)
 		{
-			printf(" - ");
+			print_sep();
 			print_coloured(CONSOLE_ERR, why);
 		}
 	}
@@ -1188,7 +1193,8 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 		if (dev->size >= SECTORS_PER_GB)
 			printf(" %uGB", dev->size / SECTORS_PER_GB);
 
-		printf(" - ");
+		print_sep();
+
 		if (security_sector_present())
 			print_coloured(CONSOLE_SUCCESS, "Security Sector");
 		else
@@ -1758,7 +1764,7 @@ int main(){
 
 		if (method)
 		{
-			printf(" - ");
+			print_sep();
 			print_coloured(CONSOLE_WARN, method);
 		}
 	}
@@ -1798,7 +1804,10 @@ int main(){
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
 		if (kernel)
-			printf(" - Kernel 2.0.%u.0", kernel);
+		{
+			print_sep();
+			printf("Kernel 2.0.%u.0", kernel);
+		}
 
 		printf("\n");
 		print_bootloaders();
@@ -1836,24 +1845,26 @@ int main(){
 
 	console_open();
 
-	printf("   GPU ID: %04x rev %02x  PCI Bridge: %02x  DVE: %02x  Video: %ux%u%s\n",
-			 xenon_get_XenosID(),
-			 xenos_revision(),
-			 xenon_get_PCIBridgeRevisionID(),
-			 xenon_get_DVE(),
+	printf("   GPU ID: %04x rev %02x", xenon_get_XenosID(), xenos_revision());
+	print_sep();
+	printf("Bridge: %02x", xenon_get_PCIBridgeRevisionID());
+	print_sep();
+	printf("DVE: %02x", xenon_get_DVE());
+	print_sep();
+	printf("Video: %ux%u%s\n",
 			 (unsigned int)ATI_INFO->width,
 			 (unsigned int)ATI_INFO->height,
 			 xenos_is_overscan() ? " overscan" : "");
 
+	printf("   Memory: %uK", xenon_get_ram_size() / 1024);
+	print_sep();
+
 	if (consoleType == REV_JASPER)
-		printf("   Memory: %uK   eDRAM: 10MB (%s)\n",
-			xenon_get_ram_size() / 1024, jasper_variant(2));
+		printf("eDRAM: 10MB (%s)\n", jasper_variant(2));
 	else if (is_elpis())
-		printf("   Memory: %uK   eDRAM: 10MB (80nm)\n",
-			xenon_get_ram_size() / 1024);
+		printf("eDRAM: 10MB (80nm)\n");
 	else
-		printf("   Memory: %uK   eDRAM: 10MB%s\n",
-			xenon_get_ram_size() / 1024, die_node(consoleType, 2));
+		printf("eDRAM: 10MB%s\n", die_node(consoleType, 2));
 
 	if (sfc.initialized == SFCX_INITIALIZED)
 	{
@@ -1863,7 +1874,10 @@ int main(){
 			sfc.size_mb, nand_type_name(sfc.meta_type));
 
 		if (smc)
-			printf("   SMC: %s", smc);
+		{
+			print_sep();
+			printf("SMC: %s", smc);
+		}
 
 		printf("\n");
 	}
@@ -1872,8 +1886,9 @@ int main(){
 		int avpack = xenon_smc_read_avpack();
 		const char *avname = avpack_name(avpack);
 
-		printf("   AV Region: %s   AV Pack: ",
-			 av_region_name(xenon_config_get_avregion()));
+		printf("   AV Region: %s", av_region_name(xenon_config_get_avregion()));
+		print_sep();
+		printf("AV Pack: ");
 
 		if (avname)
 			printf("%s\n", avname);
