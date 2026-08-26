@@ -811,6 +811,7 @@ static int security_sector_present(void)
 #define HEALTH_FAILING 2
 
 #define SMART_TIMEOUT_MSEC 2000
+#define SMART_ENABLE_OPS    0xD8
 #define SMART_RETURN_STATUS 0xDA
 #define ATA_CMD_SMART       0xB0
 
@@ -840,6 +841,17 @@ static int drive_health(void)
 	uint8_t mid, high;
 
 	if (!ata.ioaddress || !ata_wait_not_busy())
+		return HEALTH_UNKNOWN;
+
+	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_ENABLE_OPS);
+	ata_reg_write(XENON_ATA_REG_SECTORS, 0);
+	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+
+	if (!ata_wait_not_busy())
 		return HEALTH_UNKNOWN;
 
 	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
@@ -941,15 +953,18 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 		else
 			print_coloured(COLOUR_DIM, "No Security Sector");
 
+		printf(", ");
+
 		switch (drive_health())
 		{
 		case HEALTH_OK:
-			printf(", ");
 			print_coloured(CONSOLE_SUCCESS, "SMART OK");
 			break;
 		case HEALTH_FAILING:
-			printf(", ");
 			print_coloured(CONSOLE_ERR, "SMART FAILING");
+			break;
+		default:
+			print_coloured(COLOUR_DIM, "SMART n/a");
 			break;
 		}
 	}
@@ -1359,6 +1374,32 @@ int main(){
 
 	printf("\n");
 
+	procRow = console_get_cursor_y();
+
+	printf("   Microsoft %s%s %08x %u.%03uGHz Processor\n",
+			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
+			 die_node(consoleType, 0),
+			 mfspr(287),
+			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
+			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
+
+	draw_msmark(8, procRow * 16 + 1);
+
+	if (is_elpis())
+		printf("   Console: Xenon - Elpis (80nm)\n");
+	else if (consoleType >= 0 && consoleType <= 8)
+		printf("   Console: %s - %s (%dnm%s)\n",
+			 (consoleType == REV_JASPER) ? jasper_variant(0)
+						     : consoleNames[consoleType],
+			 (consoleType == REV_JASPER) ? jasper_variant(1)
+						     : gpuNames[consoleType],
+			 dieNodes[consoleType].gpu,
+			 gpu_underfill(consoleType));
+	else
+		printf("   Console: Unknown (PVR %08x)\n", mfspr(287));
+
+	printf("\n");
+
 #ifndef NO_PRINT_CONFIG
 	printf("Fuses:\n");
 	u64 fuseline[12];
@@ -1426,30 +1467,6 @@ int main(){
 	mount_all_devices();
 
 	console_open();
-
-	procRow = console_get_cursor_y();
-
-	printf("   Microsoft %s%s %08x %u.%03uGHz Processor\n",
-			 (consoleType >= 0 && consoleType <= 8) ? cpuNames[consoleType] : "Unknown",
-			 die_node(consoleType, 0),
-			 mfspr(287),
-			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
-			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
-
-	draw_msmark(8, procRow * 16 + 1);
-
-	if (is_elpis())
-		printf("   Console: Xenon - Elpis (80nm)\n");
-	else if (consoleType >= 0 && consoleType <= 8)
-		printf("   Console: %s - %s (%dnm%s)\n",
-			 (consoleType == REV_JASPER) ? jasper_variant(0)
-						     : consoleNames[consoleType],
-			 (consoleType == REV_JASPER) ? jasper_variant(1)
-						     : gpuNames[consoleType],
-			 dieNodes[consoleType].gpu,
-			 gpu_underfill(consoleType));
-	else
-		printf("   Console: Unknown (PVR %08x)\n", mfspr(287));
 
 	printf("   GPU ID: %04x rev %02x  PCI Bridge: %02x  DVE: %02x  Video: %ux%u%s\n",
 			 xenon_get_XenosID(),
