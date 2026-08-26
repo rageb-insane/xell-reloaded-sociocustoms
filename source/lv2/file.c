@@ -1,6 +1,3 @@
-/*
-used for zlib support ...
-*/
 
 #include <assert.h>
 #include <fcntl.h>
@@ -105,14 +102,6 @@ int launch_file(void *addr, unsigned len, int filetype) {
 
 int try_load_file(char *filename, int filetype) {
   int ret;
-  /* These two hand straight off to libxenon, which is called once per device
-   * per scan whether or not the file is actually there. Confirm it exists
-   * before saying a word - otherwise every device without a flash image on it
-   * gets announced as though one were about to be written.
-   *
-   * The flashing itself stays unmuted, countdown and all; a bad NAND write
-   * has to be readable. Setting the console colour around the call is enough
-   * to make the whole sequence obvious. */
   if (filetype == TYPE_NANDIMAGE || filetype == TYPE_UPDXELL) {
     unsigned int bg = console_color[0], fg = console_color[1];
     struct stat fs;
@@ -121,7 +110,7 @@ int try_load_file(char *filename, int filetype) {
     stat(filename, &fs);
 
     if (fs.st_size <= 0)
-      return -1; /* nothing here, stay quiet */
+      return -1;
 
     wait_and_cleanup_line();
     PRINT_COL(bg, CONSOLE_ERR, "\n%s Found: %s\n",

@@ -17,7 +17,7 @@
 #include <xenon_soc/xenon_secotp.h>
 #include <xenon_soc/xenon_power.h>
 #include <xenon_soc/xenon_io.h>
-#include <pci/io.h>	/* read32, for the GPU's PCI config space */
+#include <pci/io.h>
 #include <xenon_sound/sound.h>
 #include <xenon_smc/xenon_smc.h>
 #include <xenon_smc/xenon_gpio.h>
@@ -55,9 +55,6 @@ static const char *consoleNames[] =
 	"Winchester MMC",
 };
 
-/* The Xenos reports its framebuffer geometry in a fixed structure at
- * 0xec806100. libxenon reads it in console_init() but keeps the type private
- * to console.c, so the layout is repeated here rather than exported. */
 struct ati_info
 {
 	uint32_t unknown1[4];
@@ -69,44 +66,20 @@ struct ati_info
 
 #define ATI_INFO ((const volatile struct ati_info *)0xec806100)
 
-/* Screen palette, packed the way console_set_colors() wants it:
- * (b<<24)|(g<<16)|(r<<8). Charcoal reads softer than pure black on a large
- * display and gives the green/yellow/purple more to push against. */
-#define COLOUR_BG 0x1C181800	/* RGB(24,24,28) */
+#define COLOUR_BG 0x1C181800
 
-/* Drop shadow for the logo: its own alpha mask drawn black and offset,
- * underneath the real thing. The Discord mark is left flat - at 19x14 a
- * shadow only muddies it - and the handle and temperatures are console text
- * on the 8x16 cell grid, where a few pixel offset isn't expressible. */
 #define SHADOW_DX 3
 #define SHADOW_DY 3
 
-#define LOGO_MARGIN 0	/* pixels clear of the right edge of the safe area */
+#define LOGO_MARGIN 0
 
-/* console_scroll32() shifts the whole framebuffer from row 0, in 32 pixel
- * tile blocks, but console_pset() can only address from offset_y down - so
- * anything a scroll drags above that margin can't be wiped. Starting a full
- * tile block down means a scrolled copy still lands at y >= 0 where the wipe
- * can reach it, instead of stranding a sliver at the top of the screen.
- *
- * That is the whole reason for the gap above the logo. Don't lower it. */
-#define LOGO_TOP    32	/* pixels down from the top */
+#define LOGO_TOP    32
 
-/* Right edge of the panel, in console_pset() coordinates. Deliberately not
- * console_pset_right(): that measures from pixel_max_x while text measures
- * from offset_x, and the two differ by the overscan margin - which would
- * leave the text sticking out past the logo by ~8 columns at 1080p. Text
- * column C starts at pixel C*8 in this system, so both line up exactly. */
 static int panel_right(void)
 {
 	return console_get_cursor_max_x() * 8 - LOGO_MARGIN;
 }
 
-/* The panel costs 28 columns and the longest text line runs to about 72, so
- * below roughly 100 columns the two cannot coexist - at 480p there are only
- * 74 and the text would run straight through the logo. Rather than draw them
- * over each other, the whole right hand panel is dropped on narrow screens
- * and the temperatures print inline instead. */
 #define PANEL_MIN_COLS 100
 
 static int panel_fits(void)
@@ -114,9 +87,6 @@ static int panel_fits(void)
 	return console_get_cursor_max_x() >= PANEL_MIN_COLS;
 }
 
-/* Column at which a field of len characters sits centred under the logo.
- * Text lands on 8 pixel boundaries so it can be a few pixels off dead
- * centre, which is invisible at this size. */
 static int panel_col(int len)
 {
 	int left = panel_right() - LOGO_WIDTH;
@@ -124,7 +94,6 @@ static int panel_col(int len)
 	return (left + (LOGO_WIDTH - len * 8) / 2) / 8;
 }
 
-/* Alpha-blend one mask pixel of a solid colour over the background. */
 static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 {
 	unsigned int bg = console_color[0];
@@ -138,27 +107,18 @@ static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
 		     b0 + (b - b0) * (int)a / 255);
 }
 
-/* The four square Microsoft mark. Flat colours in a 2x2 grid, so it's four
- * filled rectangles rather than a bitmap - nothing to store, and it stays
- * crisp instead of picking up the antialiasing a scaled image would.
- *
- * 5px squares put it at 11px, which lands the bottom edge exactly on the text
- * baseline (the font's capitals occupy rows 2..11 of the 16px cell) with the
- * top a pixel above cap height, so it sits on the line rather than hanging
- * into the descender space below it. */
-#define MSMARK_SQ   5	/* edge of one square, pixels */
+#define MSMARK_SQ   5
 #define MSMARK_GAP  1
 #define MSMARK_SIZE (MSMARK_SQ * 2 + MSMARK_GAP)
 
 static void draw_msmark(int x, int y)
 {
-	/* sampled from the reference artwork, not the 2012 brand palette */
 	static const unsigned char square[4][3] =
 	{
-		{ 0xF1, 0x51, 0x1B },	/* top left     */
-		{ 0x80, 0xCC, 0x28 },	/* top right    */
-		{ 0x00, 0xAD, 0xEF },	/* bottom left  */
-		{ 0xFB, 0xBC, 0x09 },	/* bottom right */
+		{ 0xF1, 0x51, 0x1B },
+		{ 0x80, 0xCC, 0x28 },
+		{ 0x00, 0xAD, 0xEF },
+		{ 0xFB, 0xBC, 0x09 },
 	};
 	int i, sx, sy;
 
@@ -174,8 +134,6 @@ static void draw_msmark(int x, int y)
 	}
 }
 
-/* Two passes: the whole shadow first, then the mark on top. Drawing them per
- * pixel would let the shadow fall over parts of the mark already placed. */
 void draw_logo()
 {
 	int left, pass;
@@ -195,7 +153,7 @@ void draw_logo()
 				unsigned int a = logo_alpha[y * LOGO_WIDTH + x];
 
 				if (!a)
-					continue; /* transparent, leave the background */
+					continue;
 
 				if (pass == 0)
 					blend_pset(left + x + SHADOW_DX,
@@ -209,29 +167,19 @@ void draw_logo()
 	}
 }
 
-/* Right hand panel, stacked under the logo. The logo's last pixel row is
- * LOGO_TOP + LOGO_HEIGHT, so row 8 (pixels 128+) is the first text row clear
- * of it. TEMPS_WIDTH covers "EDRAM 40.0C" plus a column of slack. */
 #define DISCORD_TEXT "@socioculture"
 #define DISCORD_ROW  9
 #define TEMPS_ROW    11
 #define TEMPS_LINES  4
 #define TEMPS_WIDTH  11
 
-/* The band the panel owns, in pixels from the top. */
 #define LOGO_BAND_H ((TEMPS_ROW + TEMPS_LINES) * 16)
 
 static void draw_discord(void);
 static void draw_temperatures(void);
 
-/* Set once the console has scrolled, after which any row we memorised points
- * at something else and must not be written to. */
 static int screen_scrolled;
 
-/* The console scrolls the whole framebuffer, logo included, so once output
- * reaches the bottom the logo would crawl off the top. Wipe the band it lives
- * in - which also clears whatever a scroll dragged up above it - and draw it
- * again at home. Nothing else uses these columns, so the wipe is safe. */
 static void redraw_logo(void)
 {
 	unsigned int bg, r0, g0, b0, x, y;
@@ -246,7 +194,6 @@ static void redraw_logo(void)
 	b0 = (bg >> 24) & 0xff;
 	left = panel_right() - LOGO_WIDTH;
 
-	/* widened by the shadow offset so its edge gets cleared too */
 	for (y = 0; y < LOGO_BAND_H; y++)
 		for (x = 0; x < LOGO_WIDTH + SHADOW_DX; x++)
 			console_pset(left + x, y, r0, g0, b0);
@@ -256,10 +203,6 @@ static void redraw_logo(void)
 	draw_temperatures();
 }
 
-/* Called every pass of the main loop. A cursor that moved up means
- * console_scroll32() ran; near the bottom of the screen any movement at all
- * means scrolling is in progress. Idle screens redraw nothing, so there's no
- * flicker while XeLL is just sitting there. */
 static void keep_logo_in_place(void)
 {
 	static int last_y = -1;
@@ -267,7 +210,7 @@ static void keep_logo_in_place(void)
 	int y = console_get_cursor_y();
 
 	if (last_y >= 0 && y < last_y)
-		screen_scrolled = 1; /* memorised rows are meaningless from here */
+		screen_scrolled = 1;
 
 	if (last_y >= 0 && y != last_y && (y < last_y || y >= max_y - 3))
 		redraw_logo();
@@ -275,13 +218,8 @@ static void keep_logo_in_place(void)
 	last_y = y;
 }
 
-/* defined below, next to the rest of the screen helpers */
 static void print_coloured(unsigned int colour, const char *s);
 
-/* The "Network init" line is printed while DHCP is still in flight, so it
- * would otherwise sit at "requested" forever. Remember its row and rewrite it
- * once we know the outcome. Padded, so a shorter result can't leave the tail
- * of the longer one behind. */
 static int netstatus_row = -1;
 
 static void set_network_status(const char *state, unsigned int colour)
@@ -301,12 +239,9 @@ static void set_network_status(const char *state, unsigned int colour)
 		printf(" ");
 
 	console_set_cursor(x, y);
-	netstatus_row = -1; /* reported, nothing more to say */
+	netstatus_row = -1;
 }
 
-/* Printed once, after DHCP has settled, so it sits below the network config
- * instead of above it. Scanning starts as soon as the main loop does either
- * way - this is just the banner. */
 static void announce_scan(void)
 {
 	static int announced;
@@ -339,21 +274,11 @@ char FUSES[350]; /* this string stores the ascii dump of the fuses */
 unsigned char stacks[6][0x10000];
 
 #ifndef NO_NETWORKING
-/* libxenon's network_init() sits in a 15 second busy loop waiting for a DHCP
- * lease before it returns. We don't want that wait standing between the user
- * and the fuses/keys, so XeLL brings the interface up itself, fires off the
- * DHCP request and carries on booting. network_dhcp_poll() finishes the
- * handshake later on and falls back to the same static address libxenon would
- * have picked, so httpd/tftp/kboot.conf all behave as before. */
 
-/* lives in libxenon, the same init callback network_init() hands to lwip */
 extern err_t enet_init(struct netif *netif);
 
-/* how long DHCP gets before we give up on it, matching libxenon (60 * 250ms) */
 #define DHCP_TIMEOUT_MSEC 15000
 
-/* one poll slice, short enough to be invisible but long enough for the
- * handshake to step forward every time we drop by */
 #define DHCP_POLL_SLICE_MSEC 20
 
 static uint64_t dhcp_started;
@@ -386,9 +311,6 @@ static int network_start(void)
 	return NETWORK_INIT_SUCCESS;
 }
 
-/* libxenon's network_print_config() labels itself " * network config:", the one
- * line on screen that doesn't match the casing of everything else. Same
- * information, printed to match. */
 #define IP_OCTETS(ip) (int)(((ip).addr >> 24) & 0xff), (int)(((ip).addr >> 16) & 0xff), \
 		      (int)(((ip).addr >>  8) & 0xff), (int)( (ip).addr        & 0xff)
 
@@ -408,7 +330,6 @@ static void network_dhcp_poll(void)
 	if (dhcp_settled)
 		return;
 
-	/* give lwip a slice so the handshake can make progress */
 	slice = mftb();
 	do {
 		network_poll();
@@ -443,50 +364,21 @@ static void network_dhcp_poll(void)
 }
 #endif
 
-/* libxenon's print_cpu_dvd_keys() draws every line in the one console colour,
- * so XeLL prints these itself instead - same lines and failure messages, plus
- * the extra keyvault fields, with the cpu key's digits in green. Everything
- * here goes through kv_read()/kv_get_key(), both declared in xb360.h. */
 
-/* Die codename per console generation, for the processor line. The console
- * type itself is detected; this table just names the silicon that goes with
- * it. Vejle is the 45nm XCGPU's real name - "Valhalla" was only its working
- * name before the chip was finalised, though it stuck in a lot of places. */
-/* GPU die per console generation. Two of these are approximations libxenon
- * can't resolve: Zephyr_C shipped Rhea while earlier Zephyrs were Xenos, and
- * July 2009 Jaspers and every Tonasket carry Kronos rather than Zeus - both
- * report identically here. From Trinity on the GPU shares a die with the CPU,
- * so these match cpuNames. */
 static const char *gpuNames[] =
 {
-	/* Xenon shipped Y1 (codename C1). Boards refurbished by Microsoft came
-	 * back as Elpis - a Xenon reworked around a modified Rhea - and kept
-	 * their original serial, so there's nothing here to detect it by. */
-	"Y1",		/* Xenon */
+	"Y1",
 
-	/* Zephyr ran through three GPUs: Y1 on Zephyr_A, Y2 on Zephyr_B (a 2007
-	 * die shrink, still 90nm, eDRAM unchanged), then Rhea on Zephyr_C. The
-	 * sub-revisions report identically to libxenon, and unlike the
-	 * Jasper/Tonasket split there's no confirmed build-date boundary to
-	 * separate them by, so all three are named. */
-	"Y1/Y2/Rhea",	/* Zephyr */
-	"Rhea",		/* Falcon */
-	"Zeus/Kronos",	/* Jasper - see dieNodes, the two are indistinguishable */
-	"Vejle",	/* Trinity */
-	"Vejle",	/* Corona */
-	"Vejle",	/* Corona MMC */
-	"Oban",		/* Winchester */
-	"Oban",		/* Winchester MMC */
+	"Y1/Y2/Rhea",
+	"Rhea",
+	"Zeus/Kronos",
+	"Vejle",
+	"Vejle",
+	"Vejle",
+	"Oban",
+	"Oban",
 };
 
-/* Process node per die, in nanometres, following the console generation. No
- * register reports this - it follows from the board revision, the same way
- * the die codenames do. eDRAM is 10MB on every console ever made; only the
- * node it was fabbed on changed.
- *
- * Jasper's eDRAM is the one soft entry: 80nm normally, but the Kronos boards
- * (July 2009 Jaspers and every Tonasket) carry the 65nm Styx-65, and those
- * report identically to libxenon. */
 static const struct
 {
 	int cpu;
@@ -494,19 +386,17 @@ static const struct
 	const char *edram;
 } dieNodes[] =
 {
-	{ 90, 90, "90nm" },	/* Xenon */
-	{ 90, 90, "80nm" },	/* Zephyr */
-	{ 65, 80, "80nm" },	/* Falcon */
-	{ 65, 65, "80/65nm" },	/* Jasper - Styx-80 on Zeus, Styx-65 on Kronos */
-	{ 45, 45, "65nm" },	/* Trinity */
-	{ 45, 45, "65nm" },	/* Corona */
-	{ 45, 45, "65nm" },	/* Corona MMC */
-	{ 45, 45, "65nm" },	/* Winchester */
-	{ 45, 45, "65nm" },	/* Winchester MMC */
+	{ 90, 90, "90nm" },
+	{ 90, 90, "80nm" },
+	{ 65, 80, "80nm" },
+	{ 65, 65, "80/65nm" },
+	{ 45, 45, "65nm" },
+	{ 45, 45, "65nm" },
+	{ 45, 45, "65nm" },
+	{ 45, 45, "65nm" },
+	{ 45, 45, "65nm" },
 };
 
-/* " (65nm)", or nothing at all when the console type isn't one we know. One
- * static buffer, so one call per printf. */
 static const char *die_node(int type, int which)
 {
 	static char buf[16];
@@ -525,23 +415,19 @@ static const char *die_node(int type, int which)
 
 static const char *cpuNames[] =
 {
-	"Waternoose",	/* Xenon         - 90nm CPU */
-	"Waternoose",	/* Zephyr        - 90nm CPU */
-	"Loki",		/* Falcon        - 65nm CPU */
-	"Loki",		/* Jasper        - 65nm CPU */
-	"Vejle",	/* Trinity       - 45nm XCGPU */
-	"Vejle",	/* Corona        - 45nm XCGPU */
-	"Vejle",	/* Corona MMC    - 45nm XCGPU */
-	"Oban",		/* Winchester    - later XCGPU */
-	"Oban",		/* Winchester MMC- later XCGPU */
+	"Waternoose",
+	"Waternoose",
+	"Loki",
+	"Loki",
+	"Vejle",
+	"Vejle",
+	"Vejle",
+	"Oban",
+	"Oban",
 };
 
-/* CONSOLE_COLOR_GREY is RGB(192,192,192) - against white text on black that
- * reads as white. This is dim enough to actually look absent. Packed the way
- * console_set_colors() wants it: (b<<24)|(g<<16)|(r<<8). */
-#define COLOUR_DIM 0x70707000	/* RGB(112,112,112) */
+#define COLOUR_DIM 0x70707000
 
-/* Print s in colour, then put the console back how we found it. */
 static void print_coloured(unsigned int colour, const char *s)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
@@ -558,18 +444,12 @@ static void status_line(const char *label, const char *state, unsigned int colou
 	printf("\n");
 }
 
-/* The console serial says when and where the machine was built: LNNNNNN YWWFF,
- * where digit 8 is the last digit of the production year, 9-10 the week of
- * that year, and 11-12 the factory. Read before the console type line so the
- * GPU name can use it; empty when the keyvault couldn't be read. */
 static char consoleSerial[13];
 static int serial_year(void)
 {
 	if (!consoleSerial[0])
 		return -1;
 
-	/* one digit, so the decade comes from the console generation - the
-	 * original 360 ran 2005-2010, which makes 5..9 the 2000s and 0 = 2010 */
 	return (consoleSerial[7] == '0') ? 2010 : 2000 + (consoleSerial[7] - '0');
 }
 
@@ -583,6 +463,8 @@ static int serial_week(void)
 
 static const char *serial_factory(void)
 {
+	static char buf[16];
+
 	if (!consoleSerial[0])
 		return NULL;
 
@@ -595,23 +477,13 @@ static const char *serial_factory(void)
 		case '6': return "Taiwan";
 		}
 
-	return NULL;
+	sprintf(buf, "factory %c%c", consoleSerial[10], consoleSerial[11]);
+
+	return buf;
 }
 
-/* The 90nm Y1 and the 80nm Rhea shipped with a low-Tg underfill that cracked
- * under thermal cycling - the classic RRoD failure. Microsoft moved to a
- * high-Tg underfill and standardised it around June 2008, so a board built
- * after that left the factory with the reliable part.
- *
- * This reports what the console shipped with, and nothing more. It cannot
- * know whether the GPU was replaced since, and on exactly these boards that
- * is common: a refurbished console, a reball, or a retrofitted fixed part all
- * carry reliable silicon whatever the serial says. Treat "pre-fix" as "shipped
- * with the bad underfill", not "has it now".
- *
- * Only the generations that had the defect are annotated. */
 #define GPU_FIX_YEAR 2008
-#define GPU_FIX_WEEK 26	/* ~June 2008, when the high-Tg part standardised */
+#define GPU_FIX_WEEK 26
 
 static const char *gpu_underfill(int type)
 {
@@ -622,7 +494,7 @@ static const char *gpu_underfill(int type)
 		return "";
 
 	if (year < 0)
-		return "";	/* no serial to date it by */
+		return "";
 
 	if (year > GPU_FIX_YEAR || (year == GPU_FIX_YEAR && week >= GPU_FIX_WEEK))
 		return ", fixed";
@@ -630,24 +502,7 @@ static const char *gpu_underfill(int type)
 	return ", pre-fix";
 }
 
-/* libxenon reports Jasper and Tonasket identically - Tonasket is Jasper_B,
- * the last of the original 360 boards, and it differs only in carrying the
- * Kronos GPU (Zeus with the 65nm Styx-65 eDRAM in place of the 80nm one).
- * Same CPU, same GPU die, same PCI ids, so no register separates them.
- *
- * What does separate them is when the board was built, and the serial carries
- * that. The changeover ran through July 2009 with both shipping:
- *
- *   week 29 of 2009, factory 05, is a Tonasket with a Kronos - confirmed
- *   against the board itself, so that week and later is Tonasket.
- *
- * Weeks 27 and 28 sit between the documented start of July and that reading,
- * so they report both names rather than guessing. The confirmed sample is one
- * console from one factory; another plant may have switched a week either
- * side, which is the thing to revisit if a board ever contradicts this.
- *
- * which: 0 board, 1 GPU, 2 eDRAM node. */
-#define TONASKET_WEEK 29	/* first 2009 week confirmed Tonasket */
+#define TONASKET_WEEK 29
 
 static const char *jasper_variant(int which)
 {
@@ -659,32 +514,25 @@ static const char *jasper_variant(int which)
 	int week = serial_week();
 
 	if (year < 0)
-		return either[which];		/* no serial to date it by */
+		return either[which];
 
 	if (year > 2009)
-		return after[which];		/* well past the changeover */
+		return after[which];
 
 	if (year < 2009 || week < 27)
-		return before[which];		/* before it started */
+		return before[which];
 
 	if (week >= TONASKET_WEEK)
-		return after[which];		/* confirmed side */
+		return after[which];
 
-	return either[which];			/* weeks 27-28 */
+	return either[which];
 }
 
-/* libxenon exposes the PCI bridge's revision but not the GPU's, though both
- * sit in the same config layout: it reads the low byte of offset 0x08 at the
- * bridge's base 0xd0000000, so the same read at the GPU's base 0xd0010000 -
- * the one xenon_get_XenosID() uses - gives the Xenos die revision. */
 static unsigned int xenos_revision(void)
 {
 	return read32(0xd0010008) & 0xff;
 }
 
-/* AV pack IDs as libxenon's own xenos_autoset_mode() reads them - it switches
- * on exactly these values to pick a video mode, so the meanings come from
- * there rather than from guesswork. Anything unlisted prints its raw byte. */
 static const char *avpack_name(int avpack)
 {
 	switch (avpack)
@@ -734,23 +582,10 @@ static const char *nand_type_name(int meta_type)
 	return "unknown";
 }
 
-/* SMC message 0x07 answers with four sensors. The conventional order is
- * CPU, GPU, EDRAM, board, each fixed point with degrees in the high byte
- * and a 1/256 fraction in the low byte.
- *
- * These live directly under the logo, stacked one per line and right aligned
- * with it, rather than inline with the boot text. That means they sit at a
- * fixed spot on screen instead of on a row the console can scroll away, so
- * they keep updating no matter how much text goes past. Fixed width, so each
- * redraw covers the previous reading exactly. */
-/* Sits directly under the logo, above the temperatures. The mark is a solid
- * shape stored as an alpha mask like the logo, tinted to the same purple as
- * the handle beside it, and nudged down so its 14 rows centre in the 16 pixel
- * text row. */
 #define PURPLE_R ((CONSOLE_COLOR_PURPLE >>  8) & 0xff)
 #define PURPLE_G ((CONSOLE_COLOR_PURPLE >> 16) & 0xff)
 #define PURPLE_B ((CONSOLE_COLOR_PURPLE >> 24) & 0xff)
-#define DISCORD_GAP 4	/* pixels between the mark and the handle */
+#define DISCORD_GAP 4
 
 static void draw_discord(void)
 {
@@ -763,14 +598,12 @@ static void draw_discord(void)
 	len   = (int)strlen(DISCORD_TEXT);
 	left  = panel_right() - LOGO_WIDTH;
 	combo = DISCORD_WIDTH + DISCORD_GAP + len * 8;
-	/* centre the mark and handle together, then hang the mark off the text */
 	col   = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
 	iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
 	icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
 	x     = console_get_cursor_x();
 	y     = console_get_cursor_y();
 
-	/* no shadow on the mark - it's small enough that one would just muddy it */
 	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
 	{
 		for (ix = 0; ix < DISCORD_WIDTH; ix++)
@@ -791,14 +624,11 @@ static void draw_discord(void)
 	console_set_cursor(x, y);
 }
 
-/* Degrees C at which a reading stops being green. Green up to 68, yellow
- * from 69, red from 80. */
 #define TEMP_WARN 69
 #define TEMP_HOT  80
 
 static const char *sensorNames[TEMPS_LINES] = { "CPU", "GPU", "EDRAM", "MB" };
 
-/* colour for a reading, shared by the panel and inline forms */
 static unsigned int temp_colour(int deg)
 {
 	if (deg >= TEMP_HOT)
@@ -810,7 +640,6 @@ static unsigned int temp_colour(int deg)
 	return CONSOLE_SUCCESS;
 }
 
-/* One line, for screens with no room for the panel. */
 static void print_temperatures_inline(void)
 {
 	uint16_t sensor[TEMPS_LINES];
@@ -872,8 +701,6 @@ static void update_temperatures(void)
 	draw_temperatures();
 }
 
-/* Fuses blow four bits at a time, so a loader data version is the number of
- * blown nibbles: fuseline 2 carries the CB LDV, lines 7-11 the CF/CG LDV. */
 static int fuse_ldv(const u64 *fuseline, int first, int last)
 {
 	int i, bits = 0;
@@ -892,7 +719,6 @@ static int fuse_ldv(const u64 *fuseline, int first, int last)
 	return bits / 4;
 }
 
-/* ATA model strings come back space padded. */
 static const char *ata_model(struct xenon_ata_device *dev)
 {
 	static char buf[sizeof(dev->model) + 1];
@@ -901,8 +727,6 @@ static const char *ata_model(struct xenon_ata_device *dev)
 	memcpy(buf, dev->model, sizeof(dev->model));
 	buf[sizeof(dev->model)] = '\0';
 
-	/* libxenon terminates at 40 chars for ata and 24 for atapi, so trim back
-	 * from the real string end - anything past it is uninitialised. */
 	for (n = strlen(buf) - 1; n >= 0 && buf[n] == ' '; n--)
 		buf[n] = '\0';
 
@@ -937,8 +761,6 @@ static void print_key_green(char *name, unsigned char *data)
 	printf("\n");
 }
 
-/* Keyvault fields that are plain ascii. kv_get_key() insists the caller's
- * length already matches the table entry, so len has to be exact. */
 static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 			   unsigned char *kv)
 {
@@ -953,9 +775,6 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	if (kv_get_key(keyid, buf, &n, kv) != 0)
 		return;
 
-	/* These are fixed length fields, not necessarily terminated, and a blank
-	 * one is padded with nulls or spaces rather than being absent. Build a
-	 * printable copy instead of trusting %s to stop somewhere sensible. */
 	for (i = 0; i < len; i++)
 		out[i] = (buf[i] >= 0x20 && buf[i] < 0x7f) ? (char)buf[i] : ' ';
 	out[len] = '\0';
@@ -963,9 +782,6 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	for (i = len - 1; i >= 0 && out[i] == ' '; i--)
 		out[i] = '\0';
 
-	/* A serial is plain alphanumerics. Blank fields, padding, and the junk
-	 * some consoles carry here are all worth nothing on screen, so drop the
-	 * whole line rather than printing a placeholder. */
 	if (out[0] == '\0')
 		return;
 
@@ -978,26 +794,22 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	printf("%s: %s\n", label, out);
 }
 
-/* The manufacturing date lives inside the console certificate, past CertSize,
- * ConsoleId, ConsolePartNumber, Reserved, Privileges and ConsoleType - so
- * eight ascii digits at cert offset 0x1C. Only printed if it really is
- * digits, so a wrong offset shows nothing rather than garbage. */
 static void print_mfg_date(unsigned char *kv)
 {
 	unsigned char cert[0x1A8];
 	int n = sizeof(cert);
 	unsigned char *d;
-	int i, digits = 0, printable = 0;
+	int i, digits = 0, printable = 0, dashed;
 
 	if (kv_get_key(XEKEY_CONSOLE_CERTIFICATE, cert, &n, kv) != 0)
 		return;
 
-	d = &cert[0x1C]; /* ManufacturingDate, 8 bytes */
+	d = &cert[0x1C];
 
 	for (i = 0; i < 8 && !d[i]; i++)
 		;
 	if (i == 8)
-		return; /* field never programmed */
+		return;
 
 	for (i = 0; i < 8; i++)
 	{
@@ -1007,10 +819,12 @@ static void print_mfg_date(unsigned char *kv)
 			printable++;
 	}
 
-	/* Plain YYYYMMDD is the documented form, but not every console carries
-	 * it that way, so fall back to showing the bytes rather than silently
-	 * dropping the line. */
-	if (digits == 8)
+	dashed = (digits == 6 && d[2] == '-' && d[5] == '-');
+
+	if (dashed)
+		printf("   * Mfg Date: 20%c%c-%c%c-%c%c\n",
+			d[6], d[7], d[0], d[1], d[3], d[4]);
+	else if (digits == 8)
 		printf("   * Mfg Date: %c%c%c%c-%c%c-%c%c\n",
 			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 	else if (printable == 8)
@@ -1053,9 +867,6 @@ static void print_console_keys(void)
 	if (get_virtual_cpukey(key) == 0)
 		print_key("   * Virtual CPU Key", key);
 
-	/* Decrypt the keyvault once and pull every field from the same buffer.
-	 * kv_read() is an RC4 pass plus an HMAC check, and the libxenon helpers
-	 * each do their own, so this is several of those saved. */
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
 	{
@@ -1067,7 +878,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	r = kv_read(kv, 0);
 	if (r == 2 && get_virtual_cpukey(key) == 0)
-		r = kv_read(kv, 1); /* retry against the virtual fuses */
+		r = kv_read(kv, 1);
 
 	if (r != 0)
 	{
@@ -1082,9 +893,6 @@ static void print_console_keys(void)
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
 		print_key("   * DVD Key", key);
 
-	/* Take the serial out of the buffer we already decrypted rather than
-	 * reading the keyvault a second time. It dates the board, which is what
-	 * separates Jasper from Tonasket. */
 	n = 0x0C;
 	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
 	{
@@ -1151,7 +959,6 @@ void synchronize_timebases()
 	std((void*)0x200611a0,0x1ff); // restart timebase
 }
 	
-/* how the nand came up - reported after the fuses and keys, not while it runs */
 #define NAND_SKIPPED 0
 #define NAND_OK      1
 #define NAND_FAILED  2
@@ -1203,19 +1010,11 @@ int main(){
 #endif
 	console_init();
 
-	/* console_init() announces the framebuffer the instant it arms the screen
-	 * hook, so there's no muting it - wipe the screen instead. clrscr also
-	 * puts the cursor back to 0,0, so the splash starts at the top. */
 	console_clrscr();
-	redraw_logo(); /* paints the backdrop, then everything on it */
+	redraw_logo();
 
-	/* The git rev is the only thing that tells you which build actually
-	 * booted, which matters when reflashing repeatedly. RELEASE carries the
-	 * Makefile's quoting when the repo has no tags, so use GITREV directly. */
-	/* kept under 74 columns so it doesn't wrap at 480p */
 	printf("XeLL git-" GITREV " - (C) 2007-2026 LibXenon.org, Free60.org\n\n");
 
-	/* build details go to the log and the uart, not the screen */
 	console_close();
 	printf("XeLL - Xenon linux loader second stage " LONGVERSION "\n");
 	printf("Built with GCC " GCC_VERSION " and Binutils " BINUTILS_VERSION " \n");
@@ -1225,16 +1024,10 @@ int main(){
 
 	xenon_sound_init();
 
-	/* xenon_make_it_faster()/xenon_set_speed() natter about VIDs and cores
-	 * waking back up. Drop the screen hook while they run so none of it shows
-	 * - the work still happens, and the log still records it. */
 	console_close();
 	xenon_make_it_faster(XENON_SPEED_FULL);
 	console_open();
 
-	/* The nand has to come up before the keyvault can be read, so it runs
-	 * here - silently - and gets reported further down with the rest of the
-	 * init results, after the fuses and keys the user actually came for. */
 	if (xenon_get_console_type() != REV_CORONA_PHISON) //Not needed for MMC type of consoles! ;)
 	{
 		console_close();
@@ -1254,20 +1047,12 @@ int main(){
 
 	xenon_config_init();
 
-	/* Everything worth writing down is readable as soon as the NAND is up, so
-	 * print it before we go anywhere near the network - no waiting on a DHCP
-	 * server to see your fuses, cpu key, serial and dvd key. */
 
 	/* display some cpu info */
 	consoleType = xenon_get_console_type();
 
-	/* There's no register that reports the core clock, so take it from
-	 * libxenon's own timebase constant (the timebase runs at core/64) rather
-	 * than hardcoding a number here. */
 	printf("\n");
 
-	/* Leading spaces make room for the four square mark, which is wider than
-	 * the 8px cell a single space would give it. */
 	procRow = console_get_cursor_y();
 
 	printf("  Microsoft %s%s %08x %u.%03uGHz Processor\n",
@@ -1277,13 +1062,8 @@ int main(){
 			 (unsigned int)((PPC_TIMEBASE_FREQ * 64) / 1000000000LL),
 			 (unsigned int)(((PPC_TIMEBASE_FREQ * 64) / 1000000LL) % 1000));
 
-	/* bottom aligned to the text baseline at row 11 */
 	draw_msmark(0, procRow * 16 + 1);
 
-	/* The three IDs libxenon narrows the board down with. Board revisions that
-	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
-	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
-	 * what would tell them apart. */
 	printf("GPU ID: %04x rev %02x   PCI Bridge: %02x   DVE: %02x   Video: %ux%u%s\n",
 			 xenon_get_XenosID(),
 			 xenos_revision(),
@@ -1303,7 +1083,7 @@ int main(){
 		if (avname)
 			printf("%s\n\n", avname);
 		else
-			printf("%02X\n\n", avpack); /* unknown, show the raw id */
+			printf("%02X\n\n", avpack);
 	}
 
 #ifndef NO_PRINT_CONFIG
@@ -1317,12 +1097,9 @@ int main(){
 		hi=fuseline[i]>>32;
 		lo=fuseline[i]&0xffffffff;
 
-		/* the flat one-per-line dump is what the httpd /FUSE download hands
-		 * out, so keep building it exactly as before */
 		fusestr += sprintf(fusestr, "fuseset %02d: %08x%08x\n", i, hi, lo);
 	}
 
-	/* on screen they go two columns wide, 0-5 on the left, 6-11 on the right */
 	for (i=0; i<6; ++i){
 		printf("   %02d: %08x%08x     %02d: %08x%08x\n",
 			i,
@@ -1339,9 +1116,6 @@ int main(){
 	print_console_keys();
 #endif
 
-	/* Bring the drivers up with the screen hook off - all of it, lwip, the
-	 * PHY, USB enumeration and the ATA probes, is noise. We keep the results
-	 * and report them tidily below. The log still records the raw output. */
 	console_close();
 
 #ifndef NO_NETWORKING
@@ -1369,23 +1143,8 @@ int main(){
 
 	mount_all_devices();
 
-	/* back on screen for the dhcp result and the file scan */
 	console_open();
 
-	/* Read from the host bridge register HWINIT fills in, so this reflects
-	 * what's actually installed rather than assuming the stock 512MB. */
-	/* eDRAM is 10MB on every console; only the node it was fabbed on moved.
-	 *
-	 * Its ID register at 0x2000 would separate Zeus from Kronos, but reading
-	 * it without libxenon's configuration writes just returns whatever was
-	 * last on the bus - confirmed on hardware, the value moved between cold
-	 * boots. A real reading needs edram_init_state1(), which reconfigures the
-	 * eDRAM under a live console and abort()s on failure, so Jasper keeps
-	 * reporting the pair rather than guessing. */
-	/* Printed here rather than up top because the finer split - Jasper vs
-	 * Tonasket, and whether a Y1 or Rhea shipped with the fixed underfill -
-	 * needs the build date out of the serial, and the keyvault isn't read
-	 * until the key block above. Same line count, fully resolved. */
 	if (consoleType >= 0 && consoleType <= 8)
 		printf("   Console: %s - %s (%dnm%s)\n",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
@@ -1409,15 +1168,14 @@ int main(){
 			sfc.size_mb, nand_type_name(sfc.meta_type));
 
 	if (panel_fits())
-		draw_temperatures();	/* in the panel, under the logo */
+		draw_temperatures();
 	else
-		print_temperatures_inline();	/* no panel, so one line here */
+		print_temperatures_inline();
 	printf("\n");
 
 	detect_line("Storage", ataPresent, &ata);
 	detect_line("Disc Drive", atapiPresent, &atapi);
 
-	/* how the bring-up went */
 	printf("\n");
 	switch (nandStatus)
 	{
@@ -1433,7 +1191,6 @@ int main(){
 	}
 
 #ifndef NO_NETWORKING
-	/* remembered so set_network_status() can rewrite it when DHCP settles */
 	netstatus_row = console_get_cursor_y();
 
 	if (netif.ip_addr.addr)
@@ -1449,14 +1206,9 @@ int main(){
 	status_line("USB init", "success", CONSOLE_SUCCESS);
 
 #ifndef NO_NETWORKING
-	/* the drive init above gave DHCP plenty of wall clock time to answer,
-	 * so check in on it before we start hunting for files */
 	network_dhcp_poll();
 #endif
 
-	/*int device_list_size = */ // findDevices();
-
-	/* Stop logging and save it to first USB Device found that is writeable */
 	LogDeInit();
 	//extern char device_list[STD_MAX][10];
 
@@ -1480,30 +1232,20 @@ int main(){
 
 	for(;;){
 		#ifndef NO_NETWORKING
-			// The network needs to be polled for the web interface to
-			// function correctly, and it's what finishes off the DHCP
-			// handshake network_start() kicked off without blocking.
 			network_poll();
 			network_dhcp_poll();
 
-			// Held back until DHCP has resolved one way or the other, so
-			// this lands under the network config rather than above it.
-			// The scan itself has been running since the loop started.
 			if (dhcp_settled)
 				announce_scan();
 		#else
 			announce_scan();
 		#endif
 
-		// keep the temperature readout live while we sit here, and pin
-		// the logo so scrolling text doesn't carry it off the screen
 		update_temperatures();
 		keep_logo_in_place();
 
 		#ifndef NO_TFTP
-			// No point talking to a tftp server before we have an address
 			if (dhcp_settled){
-				//less likely to find something...
 				tftp_loop(boot_server_name());
 				tftp_loop(tftp_fallback_address);
 			}
