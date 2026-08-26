@@ -949,6 +949,25 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 	printf("\n");
 }
 
+#define CB_HEADER_OFFSET 0x8000
+
+static const char *cb_version(void)
+{
+	static char buf[24];
+	unsigned char hdr[4];
+
+	if (xenon_get_logical_nand_data(hdr, CB_HEADER_OFFSET, sizeof(hdr)) == -1)
+		return NULL;
+
+	if (hdr[0] < 'A' || hdr[0] > 'Z' || hdr[1] < 'A' || hdr[1] > 'Z')
+		return NULL;
+
+	sprintf(buf, "%c%c Version %u", hdr[0], hdr[1],
+		(unsigned int)((hdr[2] << 8) | hdr[3]));
+
+	return buf;
+}
+
 #define VFUSES_JTAG_OFFSET 0x95000
 #define VFUSES_LEN         0x60
 #define PATCH_SLOTS_MAX    8
@@ -1386,8 +1405,17 @@ int main(){
 			(unsigned int)(fuseline[i+6]&0xffffffff));
 	}
 
-	printf("\n   * LDV: CB %d / CF-CG %d\n",
-		fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
+	{
+		const char *cb = cb_version();
+
+		printf("\n   * LDV: CB %d / CF-CG %d",
+			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
+
+		if (cb)
+			printf(" - %s", cb);
+
+		printf("\n");
+	}
 
 	print_console_keys();
 #endif
