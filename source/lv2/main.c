@@ -1025,7 +1025,7 @@ static void print_console_keys(void)
 	unsigned char key[0x10];
 	unsigned char region[0x02];
 	unsigned char *kv;
-	int n, r, type;
+	int n, r;
 
 	printf("\n");
 
@@ -1112,15 +1112,6 @@ static void print_console_keys(void)
 			printf(", %s", factory);
 
 		printf(")\n");
-
-		/* the board name the serial resolves, which libxenon can't tell apart */
-		type = xenon_get_console_type();
-
-		if (type == REV_JASPER)
-			printf("   * Board: %s - %s\n",
-				jasper_variant(0), jasper_variant(1));
-		else if (*gpu_underfill(type))
-			printf("   * GPU underfill: %s\n", gpu_underfill(type) + 2);
 	}
 	else
 		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
@@ -1289,18 +1280,6 @@ int main(){
 	/* bottom aligned to the text baseline at row 11 */
 	draw_msmark(0, procRow * 16 + 1);
 
-	/* What libxenon can tell on its own. The finer split - Jasper vs Tonasket,
-	 * and whether a Y1 or Rhea shipped with the fixed underfill - needs the
-	 * build date out of the serial, so it's reported with the keys below
-	 * rather than reading the keyvault this early in boot. */
-	if (consoleType >= 0 && consoleType <= 8)
-		printf("Console Type: %s - %s (%dnm)\n",
-			 consoleNames[consoleType],
-			 gpuNames[consoleType],
-			 dieNodes[consoleType].gpu);
-	else
-		printf("Console Type: Unknown (PVR %08x)\n", mfspr(287));
-
 	/* The three IDs libxenon narrows the board down with. Board revisions that
 	 * share silicon (Corona / Waitsburg / Stingray) read identically here;
 	 * Tonasket differs from Jasper only by its Kronos GPU, so the Xenos ID is
@@ -1403,6 +1382,21 @@ int main(){
 	 * boots. A real reading needs edram_init_state1(), which reconfigures the
 	 * eDRAM under a live console and abort()s on failure, so Jasper keeps
 	 * reporting the pair rather than guessing. */
+	/* Printed here rather than up top because the finer split - Jasper vs
+	 * Tonasket, and whether a Y1 or Rhea shipped with the fixed underfill -
+	 * needs the build date out of the serial, and the keyvault isn't read
+	 * until the key block above. Same line count, fully resolved. */
+	if (consoleType >= 0 && consoleType <= 8)
+		printf("   Console: %s - %s (%dnm%s)\n",
+			 (consoleType == REV_JASPER) ? jasper_variant(0)
+						     : consoleNames[consoleType],
+			 (consoleType == REV_JASPER) ? jasper_variant(1)
+						     : gpuNames[consoleType],
+			 dieNodes[consoleType].gpu,
+			 gpu_underfill(consoleType));
+	else
+		printf("   Console: Unknown (PVR %08x)\n", mfspr(287));
+
 	if (consoleType == REV_JASPER)
 		printf("   Memory: %uK   eDRAM: 10MB (%s)\n",
 			xenon_get_ram_size() / 1024, jasper_variant(2));
