@@ -114,7 +114,7 @@ int try_load_file(char *filename, int filetype) {
 
     wait_and_cleanup_line();
     PRINT_COL(bg, CONSOLE_ERR, "\n%s Found: %s\n",
-              (filetype == TYPE_NANDIMAGE) ? "NAND Image" : "XeLL Update",
+              (filetype == TYPE_NANDIMAGE) ? "UpdFlash" : "UpdXeLL",
               filename);
 
     console_set_colors(bg, CONSOLE_WARN);

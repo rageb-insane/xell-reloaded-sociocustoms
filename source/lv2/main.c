@@ -66,6 +66,8 @@ struct ati_info
 
 #define ATI_INFO ((const volatile struct ati_info *)0xec806100)
 
+extern DISC_INTERFACE xenon_ata_ops;
+
 #define COLOUR_BG 0x1C181800
 
 #define SHADOW_DX 3
@@ -179,10 +181,15 @@ void draw_logo()
 static void draw_discord(void);
 static void draw_temperatures(void);
 
+static int overscan_top(void)
+{
+	return xenos_is_overscan() ? (int)(ATI_INFO->height / 28) : 0;
+}
+
 static void redraw_logo(void)
 {
-	unsigned int bg, r0, g0, b0, x, y;
-	int left;
+	unsigned int bg, r0, g0, b0;
+	int left, top, x, y;
 
 	if (!panel_fits())
 		return;
@@ -192,8 +199,9 @@ static void redraw_logo(void)
 	g0 = (bg >> 16) & 0xff;
 	b0 = (bg >> 24) & 0xff;
 	left = panel_right() - LOGO_WIDTH;
+	top  = -overscan_top();
 
-	for (y = 0; y < LOGO_BAND_H; y++)
+	for (y = top; y < LOGO_BAND_H; y++)
 		for (x = 0; x < LOGO_WIDTH + SHADOW_DX; x++)
 			console_pset(left + x, y, r0, g0, b0);
 
@@ -208,7 +216,7 @@ static void keep_logo_in_place(void)
 	int max_y = console_get_cursor_max_y();
 	int y = console_get_cursor_y();
 
-	if (last_y >= 0 && y != last_y && (y < last_y || y >= max_y - 3))
+	if (last_y >= 0 && (y != last_y || y >= max_y - 3))
 		redraw_logo();
 
 	last_y = y;
@@ -751,17 +759,82 @@ static const char *ata_model(struct xenon_ata_device *dev)
 	return buf;
 }
 
+static const char *ata_rev(struct xenon_ata_device *dev)
+{
+	static char buf[sizeof(dev->rev) + 1];
+	int n;
+
+	memcpy(buf, dev->rev, sizeof(dev->rev));
+	buf[sizeof(dev->rev)] = '\0';
+
+	for (n = strlen(buf) - 1; n >= 0 && buf[n] == ' '; n--)
+		buf[n] = '\0';
+
+	return buf;
+}
+
+#define SECURITY_SECTOR_LBA 16
+#define SS_MODEL_OFF        0x1C
+#define SS_MODEL_LEN        40
+
+static int security_sector_present(void)
+{
+	static unsigned char sec[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
+	char model[sizeof(ata.model) + 1];
+	char plain[SS_MODEL_LEN + 1], swapped[SS_MODEL_LEN + 1];
+	int i, n;
+
+	strcpy(model, ata_model(&ata));
+	if (!model[0])
+		return 0;
+
+	memset(sec, 0, sizeof(sec));
+	xenon_ata_ops.readSectors(SECURITY_SECTOR_LBA, 1, sec);
+
+	memcpy(plain, sec + SS_MODEL_OFF, SS_MODEL_LEN);
+	plain[SS_MODEL_LEN] = '\0';
+
+	for (i = 0; i < SS_MODEL_LEN; i += 2)
+	{
+		swapped[i]     = sec[SS_MODEL_OFF + i + 1];
+		swapped[i + 1] = sec[SS_MODEL_OFF + i];
+	}
+	swapped[SS_MODEL_LEN] = '\0';
+
+	for (n = SS_MODEL_LEN - 1; n >= 0 && plain[n] == ' '; n--)
+		plain[n] = '\0';
+	for (n = SS_MODEL_LEN - 1; n >= 0 && swapped[n] == ' '; n--)
+		swapped[n] = '\0';
+
+	return strcmp(plain, model) == 0 || strcmp(swapped, model) == 0;
+}
+
 static void detect_line(const char *label, int present, struct xenon_ata_device *dev)
 {
 	printf("   %s... ", label);
 
-	if (present)
-		printf("%s\n", ata_model(dev));
-	else
+	if (!present)
 	{
 		print_coloured(COLOUR_DIM, "None");
 		printf("\n");
+		return;
 	}
+
+	printf("%s", ata_model(dev));
+
+	if (ata_rev(dev)[0])
+		printf(" (%s)", ata_rev(dev));
+
+	if (dev == &ata)
+	{
+		printf(" - ");
+		if (security_sector_present())
+			print_coloured(CONSOLE_SUCCESS, "Security Sector");
+		else
+			print_coloured(COLOUR_DIM, "No Security Sector");
+	}
+
+	printf("\n");
 }
 
 static void print_key_green(char *name, unsigned char *data)
