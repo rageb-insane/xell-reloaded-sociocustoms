@@ -837,6 +837,143 @@ static int ata_wait_not_busy(void)
 	return 1;
 }
 
+#define SMART_READ_DATA    0xD0
+#define SMART_ATTR_REALLOC 5
+#define SMART_ATTR_HOURS   9
+#define SMART_ATTR_COUNT   30
+
+static int ata_wait_drq(void)
+{
+	uint64_t t = mftb();
+	uint8_t status;
+
+	for (;;)
+	{
+		status = ata_reg_read(XENON_ATA_REG_STATUS);
+
+		if (status & 0x01)
+			return 0;
+
+		if (status & 0x08)
+			return 1;
+
+		if (tb_diff_msec(mftb(), t) > SMART_TIMEOUT_MSEC)
+			return 0;
+	}
+}
+
+static int smart_table_ok(const unsigned char *buf)
+{
+	int n, seen = 0, last = 0;
+
+	for (n = 0; n < SMART_ATTR_COUNT; n++)
+	{
+		int id = buf[2 + n * 12];
+
+		if (id == 0)
+			continue;
+
+		if (id <= last)
+			return 0;
+
+		last = id;
+		seen++;
+	}
+
+	return seen >= 3;
+}
+
+static int smart_read_data(unsigned char *buf)
+{
+	int i;
+
+	if (!ata.ioaddress || !ata_wait_not_busy())
+		return 0;
+
+	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_READ_DATA);
+	ata_reg_write(XENON_ATA_REG_SECTORS, 1);
+	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+
+	if (!ata_wait_not_busy() || !ata_wait_drq())
+		return 0;
+
+	for (i = 0; i < 128; i++)
+		((uint32_t *)buf)[i] =
+			*(volatile uint32_t *)(ata.ioaddress + XENON_ATA_REG_DATA);
+
+	if (smart_table_ok(buf))
+		return 1;
+
+	for (i = 0; i < 256; i++)
+	{
+		unsigned char t = buf[i * 2];
+
+		buf[i * 2] = buf[i * 2 + 1];
+		buf[i * 2 + 1] = t;
+	}
+
+	return smart_table_ok(buf);
+}
+
+static int smart_attr(const unsigned char *buf, int id, uint32_t *out)
+{
+	int n;
+
+	for (n = 0; n < SMART_ATTR_COUNT; n++)
+	{
+		const unsigned char *e = buf + 2 + n * 12;
+
+		if (e[0] != id)
+			continue;
+
+		*out = (uint32_t)e[5] | ((uint32_t)e[6] << 8) |
+		       ((uint32_t)e[7] << 16) | ((uint32_t)e[8] << 24);
+
+		return 1;
+	}
+
+	return 0;
+}
+
+static void print_smart_wear(void)
+{
+	static unsigned char buf[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
+	uint32_t hours, bad;
+	int have_hours, have_bad;
+	char text[32];
+
+	memset(buf, 0, sizeof(buf));
+
+	if (!smart_read_data(buf))
+		return;
+
+	have_hours = smart_attr(buf, SMART_ATTR_HOURS, &hours);
+	have_bad   = smart_attr(buf, SMART_ATTR_REALLOC, &bad);
+
+	if (!have_hours && !have_bad)
+		return;
+
+	printf("      ");
+
+	if (have_hours)
+		printf("%u hours", hours);
+
+	if (have_hours && have_bad)
+		printf(", ");
+
+	if (have_bad)
+	{
+		sprintf(text, "%u reallocated", bad);
+		print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
+	}
+
+	printf("\n");
+}
+
 static int drive_health(void)
 {
 	uint8_t mid, high;
@@ -932,6 +1069,8 @@ static const char *drive_name(struct xenon_ata_device *dev)
 
 static void detect_line(const char *label, int present, struct xenon_ata_device *dev)
 {
+	int health = HEALTH_UNKNOWN;
+
 	printf("   %s... ", label);
 
 	if (!present)
@@ -955,8 +1094,9 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 			print_coloured(COLOUR_DIM, "No Security Sector");
 
 		printf(", ");
+		health = drive_health();
 
-		switch (drive_health())
+		switch (health)
 		{
 		case HEALTH_OK:
 			print_coloured(CONSOLE_SUCCESS, "SMART OK");
@@ -971,6 +1111,9 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 	}
 
 	printf("\n");
+
+	if (health != HEALTH_UNKNOWN)
+		print_smart_wear();
 }
 
 #define CB_HEADER_OFFSET 0x8000
