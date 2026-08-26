@@ -1250,6 +1250,7 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 struct bl_chain
 {
 	int count;
+	int dev;
 	int cb_count;
 	unsigned int cb_x;
 	unsigned char magic[BL_CHAIN_MAX][2];
@@ -1280,10 +1281,17 @@ static const struct bl_chain *bootloaders(void)
 		if (xenon_get_logical_nand_data(hdr, off, sizeof(hdr)) == -1)
 			break;
 
-		if (hdr[0] < 'A' || hdr[0] > 'Z' || hdr[1] < 'A' || hdr[1] > 'Z')
+		if (hdr[1] < 'A' || hdr[1] > 'Z')
 			break;
 
-		chain.magic[chain.count][0] = hdr[0];
+		if ((hdr[1] & 0x0F) < 2 || (hdr[1] & 0x0F) > 7)
+			break;
+
+		if (hdr[0] != 'C')
+			chain.dev = 1;
+
+		chain.magic[chain.count][0] =
+			(hdr[0] >= 'A' && hdr[0] <= 'Z') ? hdr[0] : 'S';
 		chain.magic[chain.count][1] = hdr[1];
 		chain.build[chain.count] = (unsigned int)((hdr[2] << 8) | hdr[3]);
 
@@ -1399,6 +1407,9 @@ static const char *exploit_method(void)
 
 	if (xenon_logical_nand_data_ok() != 0)
 		return NULL;
+
+	if (bl->dev)
+		return "Devkit";
 
 	if (bl->cb_x == CB_X_RGH13)
 		return "RGH 1.3";
