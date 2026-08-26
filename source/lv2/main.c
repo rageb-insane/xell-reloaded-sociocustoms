@@ -567,7 +567,8 @@ static const char *avpack_name(int avpack)
 	case 0x14:
 	case 0x1C:
 	case 0x1E:
-	case 0x1F: return "HDMI";
+	case 0x1F:
+	case 0x5F: return "HDMI";
 	case 0x1B:
 	case 0x59:
 	case 0x5B: return "VGA";
