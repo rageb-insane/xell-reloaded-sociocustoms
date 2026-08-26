@@ -1409,7 +1409,7 @@ static const char *exploit_method(void)
 		return NULL;
 
 	if (bl->dev)
-		return "Devkit";
+		return "DevGL";
 
 	if (bl->cb_x == CB_X_RGH13)
 		return "RGH 1.3";
