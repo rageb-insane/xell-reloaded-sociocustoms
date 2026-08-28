@@ -469,7 +469,7 @@ static void print_fuse_word(u64 value, int highlight)
 	{
 		one[0] = hex[n];
 
-		if (highlight && hex[n] != '0')
+		if (highlight && hex[n] == 'f')
 			print_coloured(CONSOLE_WARN, one);
 		else
 			printf("%s", one);
@@ -1549,14 +1549,16 @@ static const char *exploit_method(void)
 	return "RGH";
 }
 
-static void print_key_green(char *name, unsigned char *data)
+#define KEY_COLOUR CONSOLE_COLOR_RED
+
+static void print_key_hi(char *name, unsigned char *data)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
 	int i;
 
 	printf("%s: ", name);
 
-	console_set_colors(bg, CONSOLE_COLOR_GREEN);
+	console_set_colors(bg, KEY_COLOUR);
 	for (i = 0; i < 16; i++)
 		printf("%02X", data[i]);
 	console_set_colors(bg, fg);
@@ -1648,7 +1650,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
-		print_key_green("   * CPU Key", key);
+		print_key_hi("   * CPU Key", key);
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -1668,7 +1670,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-		print_key_green("   * Virtual CPU Key", key);
+		print_key("   * Virtual CPU Key", key);
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
@@ -1694,7 +1696,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	n = sizeof(key);
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
-		print_key_green("   * DVD Key", key);
+		print_key("   * DVD Key", key);
 
 	n = 0x0C;
 	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
