@@ -493,6 +493,27 @@ static char kvOsig[29];
 #define KV_OSIG_LEN        28
 #define KV_CONSOLEID_OFF   0x9CA
 #define KV_CONSOLEID_LEN   5
+#define KV_TYPE_OFFSET     0x1DF8
+#define KV_TYPE_LEN        8
+
+static int kv_type(const unsigned char *kv)
+{
+	int i, ff = 1, zero = 1;
+
+	if (KV_FLASH_SIZE < KV_TYPE_OFFSET + KV_TYPE_LEN)
+		return 0;
+
+	for (i = 0; i < KV_TYPE_LEN; i++)
+	{
+		if (kv[KV_TYPE_OFFSET + i] != 0xFF)
+			ff = 0;
+
+		if (kv[KV_TYPE_OFFSET + i] != 0x00)
+			zero = 0;
+	}
+
+	return (ff || zero) ? 1 : 2;
+}
 
 static const char *console_id_friendly(const unsigned char *raw)
 {
@@ -1812,6 +1833,15 @@ static void print_console_keys(void)
 	print_sep();
 	for (n = 0; n < KV_CONSOLEID_LEN; n++)
 		printf("%02X", kv[KV_CONSOLEID_OFF + n]);
+
+	n = kv_type(kv);
+
+	if (n)
+	{
+		print_sep();
+		printf("KV Type %d", n);
+	}
+
 	printf("\n");
 
 	memcpy(kvOsig, kv + KV_OSIG_OFFSET, KV_OSIG_LEN);
