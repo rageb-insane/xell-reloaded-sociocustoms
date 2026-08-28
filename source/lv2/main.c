@@ -512,13 +512,17 @@ static const char *console_id_friendly(const unsigned char *raw)
 	return out;
 }
 
-static const char *drive_match(struct xenon_ata_device *dev)
+#define DRIVE_UNKNOWN 0
+#define DRIVE_MATCH   1
+#define DRIVE_SWAPPED 2
+
+static int drive_match(struct xenon_ata_device *dev)
 {
 	char product[20];
 	int n;
 
 	if (!kvOsig[0])
-		return NULL;
+		return DRIVE_UNKNOWN;
 
 	memcpy(product, dev->model + 8, 16);
 	product[16] = '\0';
@@ -527,9 +531,9 @@ static const char *drive_match(struct xenon_ata_device *dev)
 		product[n] = '\0';
 
 	if (!product[0])
-		return NULL;
+		return DRIVE_UNKNOWN;
 
-	return strstr(kvOsig, product) ? "matches KV" : "KV mismatch";
+	return strstr(kvOsig, product) ? DRIVE_MATCH : DRIVE_SWAPPED;
 }
 static int serial_year(void)
 {
@@ -1284,12 +1288,16 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 	if (dev == &atapi)
 	{
-		const char *m = drive_match(dev);
-
-		if (m)
+		switch (drive_match(dev))
 		{
+		case DRIVE_MATCH:
 			print_sep();
-			print_coloured((m[0] == 'm') ? CONSOLE_SUCCESS : CONSOLE_ERR, m);
+			print_coloured(CONSOLE_SUCCESS, "Matches KV");
+			break;
+		case DRIVE_SWAPPED:
+			print_sep();
+			print_coloured(CONSOLE_ERR, "KV Mismatch");
+			break;
 		}
 	}
 
@@ -2014,7 +2022,7 @@ int main(){
 			char text[24];
 
 			print_sep();
-			sprintf(text, "%d bad block%s", bad, (bad == 1) ? "" : "s");
+			sprintf(text, "%d Bad Block%s", bad, (bad == 1) ? "" : "s");
 			print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
 		}
 
