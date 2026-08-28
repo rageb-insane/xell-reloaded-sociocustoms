@@ -973,6 +973,9 @@ static int ata_wait_not_busy(void)
 #define SMART_READ_THRESHOLDS 0xD1
 #define SMART_ATTR_REALLOC 5
 #define SMART_ATTR_HOURS   9
+#define SMART_ATTR_PENDING 197
+#define SMART_ATTR_UNCORR  198
+#define SMART_ATTR_CRC     199
 #define SMART_ATTR_COUNT   30
 #define HOURS_MID          5000
 #define HOURS_HIGH         15000
@@ -1156,7 +1159,7 @@ static const char *smart_failing_attr(const unsigned char *data)
 static void print_smart_wear(int health)
 {
 	static unsigned char buf[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
-	uint32_t hours, bad;
+	uint32_t hours, bad, count;
 	int have_hours, have_bad;
 	char text[32];
 
@@ -1186,6 +1189,27 @@ static void print_smart_wear(int health)
 	{
 		sprintf(text, "%u reallocated", bad);
 		print_coloured(bad ? CONSOLE_COLOR_RED : console_color[1], text);
+	}
+
+	if (smart_attr(buf, SMART_ATTR_PENDING, &count) && count)
+	{
+		printf(", ");
+		sprintf(text, "%u Pending", count);
+		print_coloured(CONSOLE_COLOR_RED, text);
+	}
+
+	if (smart_attr(buf, SMART_ATTR_UNCORR, &count) && count)
+	{
+		printf(", ");
+		sprintf(text, "%u Uncorrectable", count);
+		print_coloured(CONSOLE_COLOR_RED, text);
+	}
+
+	if (smart_attr(buf, SMART_ATTR_CRC, &count) && count)
+	{
+		printf(", ");
+		sprintf(text, "%u CRC Errors", count);
+		print_coloured(CONSOLE_WARN, text);
 	}
 
 	if (health == HEALTH_FAILING)
@@ -1343,13 +1367,13 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 		switch (health)
 		{
 		case HEALTH_OK:
-			print_coloured(CONSOLE_SUCCESS, "SMART OK");
+			print_coloured(CONSOLE_SUCCESS, "S.M.A.R.T OK");
 			break;
 		case HEALTH_FAILING:
-			print_coloured(CONSOLE_COLOR_RED, "SMART FAILING");
+			print_coloured(CONSOLE_COLOR_RED, "S.M.A.R.T FAILING");
 			break;
 		default:
-			print_coloured(COLOUR_DIM, "SMART n/a");
+			print_coloured(COLOUR_DIM, "S.M.A.R.T n/a");
 			break;
 		}
 	}
