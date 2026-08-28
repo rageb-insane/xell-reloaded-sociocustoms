@@ -886,11 +886,13 @@ static void draw_temperatures(void)
 	console_set_cursor(x, y);
 }
 
+#define TEMPS_INTERVAL_MSEC 1000
+
 static void update_temperatures(void)
 {
 	static uint64_t last_update;
 
-	if (tb_diff_msec(mftb(), last_update) < 2000)
+	if (tb_diff_msec(mftb(), last_update) < TEMPS_INTERVAL_MSEC)
 		return;
 	last_update = mftb();
 
@@ -2092,7 +2094,9 @@ int main(){
 	{
 		unsigned int kernel = kernel_version();
 
-		printf("\n   * LDV: CB %d / CF-CG %d",
+		printf("\n");
+		print_bullet();
+		printf("LDV: CB %d / CF-CG %d",
 			fuse_ldv(fuseline, 2, 2), fuse_ldv(fuseline, 7, 11));
 
 		if (kernel)
