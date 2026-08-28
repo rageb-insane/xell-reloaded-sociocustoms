@@ -1617,12 +1617,22 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 	printf("%s: %s\n", label, out);
 }
 
-static void print_mfg_date(unsigned char *kv)
+static char mfgDate[24];
+static int mfgYear, mfgWeek;
+
+static void read_mfg_date(unsigned char *kv)
 {
+	static const int cum[12] =
+		{ 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
 	unsigned char cert[0x1A8];
 	int n = sizeof(cert);
 	unsigned char *d;
 	int i, digits = 0, printable = 0, dashed;
+	int y = 0, mo = 0, da = 0, doy;
+
+	mfgDate[0] = '\0';
+	mfgYear = 0;
+	mfgWeek = 0;
 
 	if (kv_get_key(XEKEY_CONSOLE_CERTIFICATE, cert, &n, kv) != 0)
 		return;
@@ -1645,16 +1655,42 @@ static void print_mfg_date(unsigned char *kv)
 	dashed = (digits == 6 && d[2] == '-' && d[5] == '-');
 
 	if (dashed)
-		printf("   * Mfg Date: 20%c%c-%c%c-%c%c\n",
-			d[6], d[7], d[0], d[1], d[3], d[4]);
+	{
+		y  = 2000 + (d[6] - '0') * 10 + (d[7] - '0');
+		mo = (d[0] - '0') * 10 + (d[1] - '0');
+		da = (d[3] - '0') * 10 + (d[4] - '0');
+	}
 	else if (digits == 8)
-		printf("   * Mfg Date: %c%c%c%c-%c%c-%c%c\n",
-			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+	{
+		y  = (d[0] - '0') * 1000 + (d[1] - '0') * 100 +
+		     (d[2] - '0') * 10 + (d[3] - '0');
+		mo = (d[4] - '0') * 10 + (d[5] - '0');
+		da = (d[6] - '0') * 10 + (d[7] - '0');
+	}
 	else if (printable == 8)
-		printf("   * Mfg Date: %.8s\n", (char *)d);
+	{
+		sprintf(mfgDate, "%.8s", (char *)d);
+		return;
+	}
 	else
-		printf("   * Mfg Date: %02X%02X%02X%02X%02X%02X%02X%02X\n",
+	{
+		sprintf(mfgDate, "%02X%02X%02X%02X%02X%02X%02X%02X",
 			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+		return;
+	}
+
+	sprintf(mfgDate, "%04d-%02d-%02d", y, mo, da);
+
+	if (mo < 1 || mo > 12 || da < 1 || da > 31)
+		return;
+
+	doy = cum[mo - 1] + da;
+
+	if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+		doy++;
+
+	mfgYear = y;
+	mfgWeek = (doy + 6) / 7;
 }
 
 static void print_console_keys(void)
@@ -1732,20 +1768,45 @@ static void print_console_keys(void)
 		}
 	}
 
+	read_mfg_date(kv);
+
 	if (consoleSerial[0])
 	{
 		const char *factory = serial_factory();
+		int drift = mfgWeek - serial_week();
 
-		printf("   * Serial: %s  (%d week %d", consoleSerial,
-			serial_year(), serial_week());
+		printf("   * Serial: %s", consoleSerial);
+
+		if (mfgDate[0])
+		{
+			print_sep();
+			printf("%s", mfgDate);
+		}
+
+		print_sep();
+		printf("Week %d", serial_week());
 
 		if (factory)
 			printf(", %s", factory);
 
-		printf(")\n");
+		if (drift < 0)
+			drift = -drift;
+
+		if (mfgYear && (mfgYear != serial_year() || drift > 1))
+		{
+			print_sep();
+			print_coloured(CONSOLE_COLOR_RED, "Date Mismatch");
+		}
+
+		printf("\n");
 	}
 	else
+	{
 		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
+
+		if (mfgDate[0])
+			printf("   * Mfg Date: %s\n", mfgDate);
+	}
 
 	printf("   * Console ID: %s", console_id_friendly(kv + KV_CONSOLEID_OFF));
 	print_sep();
@@ -1764,7 +1825,6 @@ static void print_console_keys(void)
 		}
 
 	print_kv_ascii("   * Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
-	print_mfg_date(kv);
 
 	n = sizeof(region);
 	if (kv_get_key(XEKEY_GAME_REGION, region, &n, kv) == 0)
