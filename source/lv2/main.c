@@ -463,6 +463,32 @@ static void status_line(const char *label, const char *state, unsigned int colou
 }
 
 static char consoleSerial[13];
+static char kvOsig[29];
+
+#define KV_OSIG_OFFSET     0xC92
+#define KV_OSIG_LEN        28
+#define KV_CONSOLEID_OFF   0x9CA
+#define KV_CONSOLEID_LEN   5
+
+static const char *drive_match(struct xenon_ata_device *dev)
+{
+	char product[20];
+	int n;
+
+	if (!kvOsig[0])
+		return NULL;
+
+	memcpy(product, dev->model + 8, 16);
+	product[16] = '\0';
+
+	for (n = 15; n >= 0 && (product[n] == ' ' || product[n] == '\0'); n--)
+		product[n] = '\0';
+
+	if (!product[0])
+		return NULL;
+
+	return strstr(kvOsig, product) ? "matches KV" : "KV mismatch";
+}
 static int serial_year(void)
 {
 	if (!consoleSerial[0])
@@ -605,6 +631,30 @@ static const char *av_region_name(int region)
 	}
 
 	return "Invalid";
+}
+
+#define NAND_BLOCK_SCAN_MAX 4096
+
+static int nand_bad_blocks(void)
+{
+	static unsigned char page[MAX_PAGE_SZ];
+	int block, bad = 0, blocks = sfc.size_blocks;
+
+	if (sfc.initialized != SFCX_INITIALIZED)
+		return -1;
+
+	if (blocks <= 0 || blocks > NAND_BLOCK_SCAN_MAX)
+		return -1;
+
+	for (block = 0; block < blocks; block++)
+	{
+		int status = sfcx_read_page(page, sfcx_block_to_address(block), 1);
+
+		if (!SFCX_SUCCESS(status) || !sfcx_is_pagevalid(page))
+			bad++;
+	}
+
+	return bad;
 }
 
 #define SMC_QUERY_VERSION 0x12
@@ -1202,6 +1252,17 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 	printf("%s", drive_name(dev));
 
+	if (dev == &atapi)
+	{
+		const char *m = drive_match(dev);
+
+		if (m)
+		{
+			print_sep();
+			print_coloured((m[0] == 'm') ? CONSOLE_SUCCESS : CONSOLE_ERR, m);
+		}
+	}
+
 	if (dev == &ata)
 	{
 		if (dev->size >= SECTORS_PER_GB)
@@ -1603,6 +1664,22 @@ static void print_console_keys(void)
 	}
 	else
 		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
+
+	printf("   * Console ID: ");
+	for (n = 0; n < KV_CONSOLEID_LEN; n++)
+		printf("%02X", kv[KV_CONSOLEID_OFF + n]);
+	printf("\n");
+
+	memcpy(kvOsig, kv + KV_OSIG_OFFSET, KV_OSIG_LEN);
+	kvOsig[KV_OSIG_LEN] = '\0';
+
+	for (n = 0; n < KV_OSIG_LEN; n++)
+		if (kvOsig[n] < 0x20 || kvOsig[n] > 0x7e)
+		{
+			kvOsig[n] = '\0';
+			break;
+		}
+
 	print_kv_ascii("   * Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
 	print_mfg_date(kv);
 
@@ -1884,6 +1961,7 @@ int main(){
 	if (sfc.initialized == SFCX_INITIALIZED)
 	{
 		const char *smc = smc_version();
+		int bad = nand_bad_blocks();
 
 		printf("   NAND: %dMB (%s)",
 			sfc.size_mb, nand_type_name(sfc.meta_type));
@@ -1892,6 +1970,15 @@ int main(){
 		{
 			print_sep();
 			printf("SMC: %s", smc);
+		}
+
+		if (bad >= 0)
+		{
+			char text[24];
+
+			print_sep();
+			sprintf(text, "%d bad block%s", bad, (bad == 1) ? "" : "s");
+			print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
 		}
 
 		printf("\n");
