@@ -452,6 +452,13 @@ static void print_sep(void)
 	print_coloured(COLOUR_DIM, " | ");
 }
 
+static void print_bullet(void)
+{
+	printf("   ");
+	print_coloured(COLOUR_DIM, "*");
+	printf(" ");
+}
+
 #define LDV_FUSE_FIRST 7
 #define LDV_FUSE_LAST  11
 
@@ -1490,7 +1497,8 @@ static void print_bootloaders(void)
 	if (bl->count == 0)
 		return;
 
-	printf("   * Bootloaders:");
+	print_bullet();
+	printf("Bootloaders:");
 
 	for (n = 0; n < bl->count; n++)
 		printf("  %c%c %u", bl->magic[n][0], bl->magic[n][1], bl->build[n]);
@@ -1590,11 +1598,25 @@ static const char *exploit_method(void)
 
 #define KEY_COLOUR CONSOLE_COLOR_RED
 
-static void print_key_hi(char *name, unsigned char *data)
+static void print_key_plain(const char *name, unsigned char *data)
+{
+	int i;
+
+	print_bullet();
+	printf("%s: ", name);
+
+	for (i = 0; i < 16; i++)
+		printf("%02X", data[i]);
+
+	printf("\n");
+}
+
+static void print_key_hi(const char *name, unsigned char *data)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
 	int i;
 
+	print_bullet();
 	printf("%s: ", name);
 
 	console_set_colors(bg, KEY_COLOUR);
@@ -1635,6 +1657,7 @@ static void print_kv_ascii(const char *label, unsigned char keyid, int len,
 		      (out[i] >= 'a' && out[i] <= 'z')))
 			return;
 
+	print_bullet();
 	printf("%s: %s\n", label, out);
 }
 
@@ -1725,7 +1748,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (cpu_get_key(key) == 0)
-		print_key_hi("   * CPU Key", key);
+		print_key_hi("CPU Key", key);
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -1745,7 +1768,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-		print_key("   * Virtual CPU Key", key);
+		print_key_plain("Virtual CPU Key", key);
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
@@ -1771,7 +1794,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	n = sizeof(key);
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
-		print_key("   * DVD Key", key);
+		print_key_plain("DVD Key", key);
 
 	n = 0x0C;
 	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
@@ -1796,7 +1819,8 @@ static void print_console_keys(void)
 		const char *factory = serial_factory();
 		int drift = mfgWeek - serial_week();
 
-		printf("   * Serial: %s", consoleSerial);
+		print_bullet();
+		printf("Serial: %s", consoleSerial);
 
 		if (mfgDate[0])
 		{
@@ -1823,13 +1847,15 @@ static void print_console_keys(void)
 	}
 	else
 	{
-		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
+		print_kv_ascii("Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
 
 		if (mfgDate[0])
-			printf("   * Mfg Date: %s\n", mfgDate);
+			print_bullet();
+			printf("Mfg Date: %s\n", mfgDate);
 	}
 
-	printf("   * Console ID: %s", console_id_friendly(kv + KV_CONSOLEID_OFF));
+	print_bullet();
+	printf("Console ID: %s", console_id_friendly(kv + KV_CONSOLEID_OFF));
 	print_sep();
 	for (n = 0; n < KV_CONSOLEID_LEN; n++)
 		printf("%02X", kv[KV_CONSOLEID_OFF + n]);
@@ -1854,7 +1880,7 @@ static void print_console_keys(void)
 			break;
 		}
 
-	print_kv_ascii("   * Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
+	print_kv_ascii("Mobo Serial", XEKEY_MOBO_SERIAL_NUMBER, 0x0C, kv);
 
 	n = sizeof(region);
 	if (kv_get_key(XEKEY_GAME_REGION, region, &n, kv) == 0)
@@ -1862,7 +1888,8 @@ static void print_console_keys(void)
 		unsigned int code = (region[0] << 8) | region[1];
 		const char *name = game_region_name(code);
 
-		printf("   * Game Region: %04X", code);
+		print_bullet();
+		printf("Game Region: %04X", code);
 
 		if (name)
 			printf(" - %s", name);
