@@ -1336,16 +1336,10 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 	if (dev == &atapi)
 	{
-		switch (drive_match(dev))
+		if (drive_match(dev) == DRIVE_SWAPPED)
 		{
-		case DRIVE_MATCH:
 			print_sep();
-			print_coloured(CONSOLE_SUCCESS, "Matches KV");
-			break;
-		case DRIVE_SWAPPED:
-			print_sep();
-			print_coloured(CONSOLE_COLOR_RED, "KV Mismatch");
-			break;
+			print_coloured(CONSOLE_COLOR_RED, "Not The KV Drive");
 		}
 	}
 
