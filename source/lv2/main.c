@@ -470,6 +470,48 @@ static char kvOsig[29];
 #define KV_CONSOLEID_OFF   0x9CA
 #define KV_CONSOLEID_LEN   5
 
+static const char *console_id_friendly(const unsigned char *raw)
+{
+	static char out[16];
+	char hex[11], dec[24];
+	uint64_t v = 0;
+	int i, n = 0, pad;
+
+	for (i = 0; i < KV_CONSOLEID_LEN; i++)
+		sprintf(hex + i * 2, "%02X", raw[i]);
+
+	hex[10] = '\0';
+
+	for (i = 0; i < 9; i++)
+		v = v * 16 +
+			(uint64_t)((hex[i] <= '9') ? hex[i] - '0' : hex[i] - 'A' + 10);
+
+	if (v == 0)
+		dec[n++] = '0';
+
+	while (v)
+	{
+		dec[n++] = (char)('0' + (int)(v % 10));
+		v /= 10;
+	}
+
+	pad = 12 - (n + 1);
+
+	if (pad < 0)
+		pad = 0;
+
+	for (i = 0; i < pad; i++)
+		out[i] = '0';
+
+	for (n--; n >= 0; n--)
+		out[i++] = dec[n];
+
+	out[i++] = hex[9];
+	out[i] = '\0';
+
+	return out;
+}
+
 static const char *drive_match(struct xenon_ata_device *dev)
 {
 	char product[20];
@@ -678,18 +720,6 @@ static const char *smc_version(void)
 		return NULL;
 
 	return text;
-}
-
-static const char *nand_type_name(int meta_type)
-{
-	switch (meta_type)
-	{
-	case META_TYPE_0: return "small block";
-	case META_TYPE_1: return "Jasper 16MB";
-	case META_TYPE_2: return "large block";
-	}
-
-	return "unknown";
 }
 
 #define BLURPLE_R ((DISCORD_COLOUR >>  8) & 0xff)
@@ -1665,7 +1695,8 @@ static void print_console_keys(void)
 	else
 		print_kv_ascii("   * Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
 
-	printf("   * Console ID: ");
+	printf("   * Console ID: %s", console_id_friendly(kv + KV_CONSOLEID_OFF));
+	print_sep();
 	for (n = 0; n < KV_CONSOLEID_LEN; n++)
 		printf("%02X", kv[KV_CONSOLEID_OFF + n]);
 	printf("\n");
@@ -1943,12 +1974,19 @@ int main(){
 	print_sep();
 	printf("DVE: %02x", xenon_get_DVE());
 	print_sep();
-	printf("Video: %ux%u%s\n",
+	printf("Video: %ux%u\n",
 			 (unsigned int)ATI_INFO->width,
-			 (unsigned int)ATI_INFO->height,
-			 xenos_is_overscan() ? " overscan" : "");
+			 (unsigned int)ATI_INFO->height);
 
-	printf("   Memory: %uK", xenon_get_ram_size() / 1024);
+	{
+		unsigned int mb = xenon_get_ram_size() / (1024 * 1024);
+
+		if (mb >= 1024)
+			printf("   Memory: %uGB", mb / 1024);
+		else
+			printf("   Memory: %uMB", mb);
+	}
+
 	print_sep();
 
 	if (consoleType == REV_JASPER)
@@ -1963,8 +2001,7 @@ int main(){
 		const char *smc = smc_version();
 		int bad = nand_bad_blocks();
 
-		printf("   NAND: %dMB (%s)",
-			sfc.size_mb, nand_type_name(sfc.meta_type));
+		printf("   NAND: %dMB", sfc.size_mb);
 
 		if (smc)
 		{
