@@ -452,6 +452,30 @@ static void print_sep(void)
 	print_coloured(COLOUR_DIM, " | ");
 }
 
+#define LDV_FUSE_FIRST 7
+#define LDV_FUSE_LAST  11
+
+static void print_fuse_word(u64 value, int highlight)
+{
+	char hex[17], one[2];
+	int n;
+
+	sprintf(hex, "%08x%08x",
+		(unsigned int)(value >> 32), (unsigned int)(value & 0xffffffff));
+
+	one[1] = '\0';
+
+	for (n = 0; n < 16; n++)
+	{
+		one[0] = hex[n];
+
+		if (highlight && hex[n] != '0')
+			print_coloured(CONSOLE_WARN, one);
+		else
+			printf("%s", one);
+	}
+}
+
 static void status_line(const char *label, const char *state, unsigned int colour)
 {
 	if (colour == CONSOLE_SUCCESS)
@@ -1161,7 +1185,7 @@ static void print_smart_wear(int health)
 	if (have_bad)
 	{
 		sprintf(text, "%u reallocated", bad);
-		print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
+		print_coloured(bad ? CONSOLE_COLOR_RED : console_color[1], text);
 	}
 
 	if (health == HEALTH_FAILING)
@@ -1171,7 +1195,7 @@ static void print_smart_wear(int health)
 		if (why)
 		{
 			print_sep();
-			print_coloured(CONSOLE_ERR, why);
+			print_coloured(CONSOLE_COLOR_RED, why);
 		}
 	}
 
@@ -1296,7 +1320,7 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 			break;
 		case DRIVE_SWAPPED:
 			print_sep();
-			print_coloured(CONSOLE_ERR, "KV Mismatch");
+			print_coloured(CONSOLE_COLOR_RED, "KV Mismatch");
 			break;
 		}
 	}
@@ -1322,7 +1346,7 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 			print_coloured(CONSOLE_SUCCESS, "SMART OK");
 			break;
 		case HEALTH_FAILING:
-			print_coloured(CONSOLE_ERR, "SMART FAILING");
+			print_coloured(CONSOLE_COLOR_RED, "SMART FAILING");
 			break;
 		default:
 			print_coloured(COLOUR_DIM, "SMART n/a");
@@ -1644,7 +1668,7 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-		print_key("   * Virtual CPU Key", key);
+		print_key_green("   * Virtual CPU Key", key);
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
@@ -1670,7 +1694,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	n = sizeof(key);
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
-		print_key("   * DVD Key", key);
+		print_key_green("   * DVD Key", key);
 
 	n = 0x0C;
 	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
@@ -1919,13 +1943,13 @@ int main(){
 	}
 
 	for (i=0; i<6; ++i){
-		printf("   %02d: %08x%08x     %02d: %08x%08x\n",
-			i,
-			(unsigned int)(fuseline[i]>>32),
-			(unsigned int)(fuseline[i]&0xffffffff),
-			i+6,
-			(unsigned int)(fuseline[i+6]>>32),
-			(unsigned int)(fuseline[i+6]&0xffffffff));
+		printf("   %02d: ", i);
+		print_fuse_word(fuseline[i],
+			i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+		printf("     %02d: ", i + 6);
+		print_fuse_word(fuseline[i + 6],
+			(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
+		printf("\n");
 	}
 
 	{
@@ -2023,7 +2047,7 @@ int main(){
 
 			print_sep();
 			sprintf(text, "%d Bad Block%s", bad, (bad == 1) ? "" : "s");
-			print_coloured(bad ? CONSOLE_ERR : console_color[1], text);
+			print_coloured(bad ? CONSOLE_COLOR_RED : console_color[1], text);
 		}
 
 		printf("\n");
