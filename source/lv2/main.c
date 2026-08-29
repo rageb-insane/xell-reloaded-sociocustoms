@@ -902,6 +902,86 @@ static int nand_bad_blocks(void)
 #define SMC_SIG_LEN       0xE1
 #define SMC_SIG_SITES     5
 #define SMC_VAR_WINDOW    0x1500
+#define SMC_CHUNK         0x200
+#define SMC_MAX_LEN       0x8000
+
+static int smc_read_window(unsigned char *out, uint32_t base, uint32_t want)
+{
+	unsigned char chunk[SMC_CHUNK];
+	unsigned int keys[4] = { 0x42, 0x75, 0x4E, 0x79 };
+	uint32_t start = 0, len = 0, off, end = base + want;
+	unsigned int i, n, pos = 0;
+
+	if (xenon_logical_nand_data_ok() != 0)
+		return -1;
+
+	if (xenon_get_logical_nand_data(&len, SMC_HDR_LEN_OFF, sizeof(len)) == -1 ||
+	    xenon_get_logical_nand_data(&start, SMC_HDR_START_OFF, sizeof(start)) == -1)
+		return -1;
+
+	if (start == 0 || len > SMC_MAX_LEN || len < end)
+		return -1;
+
+	for (off = 0; off < end; off += SMC_CHUNK)
+	{
+		n = SMC_CHUNK;
+
+		if (off + n > end)
+			n = end - off;
+
+		if (xenon_get_logical_nand_data(chunk, start + off, n) == -1)
+			return -1;
+
+		for (i = 0; i < n; i++, pos++)
+		{
+			unsigned int mod = (unsigned int)chunk[i] * 0xFB;
+			unsigned char dec =
+				(unsigned char)(chunk[i] ^ (keys[pos & 3] & 0xFF));
+
+			keys[(pos + 1) & 3] += mod;
+			keys[(pos + 2) & 3] += (mod >> 8);
+
+			if (pos >= base)
+				out[pos - base] = dec;
+		}
+	}
+
+	return (int)len;
+}
+
+static const unsigned short smcSigSite[SMC_SIG_SITES] =
+	{ 0x03, 0x0B, 0xDE, 0xDF, 0xE0 };
+
+static const struct
+{
+	unsigned char byte[SMC_SIG_SITES];
+	const char *name;
+} smcWiring[] = {
+	{ { 0xCC, 0xCC, 0xF8, 0xD0, 0xE0 }, "AUD_CLAMP" },
+	{ { 0x83, 0x83, 0xD0, 0xE0, 0xF8 }, "ARGON_DATA" },
+};
+
+static const char *smc_jtag_wiring(void)
+{
+	unsigned char sig[SMC_SIG_LEN];
+	unsigned int i;
+	int k;
+
+	if (smc_read_window(sig, SMC_SIG_BASE, SMC_SIG_LEN) < 0)
+		return NULL;
+
+	for (i = 0; i < sizeof(smcWiring) / sizeof(smcWiring[0]); i++)
+	{
+		for (k = 0; k < SMC_SIG_SITES; k++)
+			if (sig[smcSigSite[k]] != smcWiring[i].byte[k])
+				break;
+
+		if (k == SMC_SIG_SITES)
+			return smcWiring[i].name;
+	}
+
+	return NULL;
+}
 
 #define SMC_VAR_SITES 8
 #define SMC_VAR_DISC  2
