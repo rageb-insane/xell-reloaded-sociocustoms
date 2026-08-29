@@ -1417,12 +1417,15 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 #define BL_STAGE_2BL  2
 #define CB_X_RGH13    42069
+#define CB_A_MFG      9188
 
 struct bl_chain
 {
 	int count;
 	int dev;
 	int cb_count;
+	unsigned int cb_a;
+	unsigned int cb_b;
 	unsigned int cb_x;
 	unsigned char magic[BL_CHAIN_MAX][2];
 	unsigned int build[BL_CHAIN_MAX];
@@ -1483,6 +1486,12 @@ static const struct bl_chain *bootloaders(void)
 
 		if (off >= BL_WALK_LIMIT)
 			break;
+	}
+
+	if (chain.cb_count >= 1)
+	{
+		chain.cb_a = cb_build[0];
+		chain.cb_b = cb_build[chain.cb_count - 1];
 	}
 
 	if (chain.cb_count >= 3)
@@ -1596,7 +1605,15 @@ static const char *exploit_method(void)
 		return "JTAG";
 
 	if (bl->cb_count >= 2)
+	{
+		if (bl->cb_a == CB_A_MFG && bl->cb_b != CB_A_MFG)
+			return "RGH2m";
+
+		if (xenon_get_console_type() == REV_TRINITY)
+			return "RGH";
+
 		return "RGH2";
+	}
 
 	if (bl->cb_count == 1)
 		return "RGH1";
