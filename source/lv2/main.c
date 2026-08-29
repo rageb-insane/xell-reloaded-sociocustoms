@@ -2202,8 +2202,10 @@ static void print_console_keys(void)
 		print_kv_ascii("Serial", XEKEY_CONSOLE_SERIAL_NUMBER, 0x0C, kv);
 
 		if (mfgDate[0])
+		{
 			print_bullet();
 			printf("Mfg Date: %s\n", mfgDate);
+		}
 	}
 
 	print_bullet();
