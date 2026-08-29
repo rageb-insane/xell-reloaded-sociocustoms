@@ -1595,6 +1595,12 @@ static const char *exploit_method(void)
 	if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
 		return "JTAG";
 
+	if (bl->cb_count >= 2)
+		return "RGH2";
+
+	if (bl->cb_count == 1)
+		return "RGH1";
+
 	return "RGH";
 }
 
