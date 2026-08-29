@@ -1253,7 +1253,7 @@ static const char *ata_model(struct xenon_ata_device *dev)
 #define SS_MODEL_OFF        0x1C
 #define SS_MODEL_LEN        40
 
-static int security_sector_present(void)
+static int security_sectors_present(void)
 {
 	static unsigned char sec[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
 	char model[sizeof(ata.model) + 1];
@@ -1698,10 +1698,10 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 		print_sep();
 
-		if (security_sector_present())
-			print_coloured(CONSOLE_SUCCESS, "Security Sector");
+		if (security_sectors_present())
+			print_coloured(CONSOLE_SUCCESS, "Security Sectors");
 		else
-			print_coloured(COLOUR_DIM, "No Security Sector");
+			print_coloured(COLOUR_DIM, "No Security Sectors");
 
 		printf(", ");
 		health = drive_health();
