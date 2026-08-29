@@ -2395,12 +2395,20 @@ int main(){
 	if (is_elpis())
 		printf("   Console: Xenon - Elpis (%s)", gpu_detail(consoleType));
 	else if (consoleType >= 0 && consoleType <= 8)
-		printf("   Console: %s - %s (%s)",
-			 (consoleType == REV_JASPER) ? jasper_variant(0)
-						     : consoleNames[consoleType],
-			 (consoleType == REV_JASPER) ? jasper_variant(1)
-						     : gpuNames[consoleType],
-			 gpu_detail(consoleType));
+	{
+		const char *name = (consoleType == REV_JASPER)
+					? jasper_variant(0)
+					: consoleNames[consoleType];
+		const char *pkg = (consoleType == REV_JASPER)
+					? jasper_variant(1)
+					: gpuNames[consoleType];
+
+		if (strcmp(pkg, cpuNames[consoleType]) == 0)
+			printf("   Console: %s", name);
+		else
+			printf("   Console: %s - %s (%s)", name, pkg,
+				 gpu_detail(consoleType));
+	}
 	else
 		printf("   Console: Unknown (PVR %08x)", mfspr(287));
 
