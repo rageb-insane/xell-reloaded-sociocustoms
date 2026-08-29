@@ -1526,7 +1526,7 @@ static void print_smart_wear(int health)
 
 	if (have_hours)
 	{
-		sprintf(text, "%u hours", hours);
+		sprintf(text, "%u hour%s", hours, (hours == 1) ? "" : "s");
 		print_coloured(hours_colour(hours), text);
 	}
 
@@ -1556,7 +1556,7 @@ static void print_smart_wear(int health)
 	if (smart_attr(buf, SMART_ATTR_CRC, &count) && count)
 	{
 		printf(", ");
-		sprintf(text, "%u CRC Errors", count);
+		sprintf(text, "%u CRC Error%s", count, (count == 1) ? "" : "s");
 		print_coloured(CONSOLE_WARN, text);
 	}
 
