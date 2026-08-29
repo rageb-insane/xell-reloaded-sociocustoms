@@ -589,10 +589,22 @@ static int drive_match(struct xenon_ata_device *dev)
 }
 static int serial_year(void)
 {
+	int digit, year;
+
 	if (!consoleSerial[0])
 		return -1;
 
-	return (consoleSerial[7] == '0') ? 2010 : 2000 + (consoleSerial[7] - '0');
+	digit = consoleSerial[7] - '0';
+
+	if (digit < 0 || digit > 9)
+		return -1;
+
+	year = (digit >= 5) ? 2000 + digit : 2010 + digit;
+
+	if (year < 2010 && xenon_get_console_type() >= REV_TRINITY)
+		year += 10;
+
+	return year;
 }
 
 static int serial_week(void)
@@ -2195,7 +2207,11 @@ int main(){
 	if (sfc.initialized == SFCX_INITIALIZED)
 	{
 		const char *smc = smc_version();
-		int bad = nand_bad_blocks();
+		int bad;
+
+		console_close();
+		bad = nand_bad_blocks();
+		console_open();
 
 		printf("   NAND: %dMB", sfc.size_mb);
 
