@@ -698,6 +698,76 @@ static const char *jasper_variant(int which)
 
 	return either[which];
 }
+static const struct
+{
+	const char *pkg;
+	const char *gpu;
+	int gpuNode;
+	const char *edram;
+	int edramNode;
+} gpuDies[] =
+{
+	{ "Y1",     "Xenos C1", 90, "Edifis",  90 },
+	{ "Y2",     "Xenos C2", 90, "Edifis",  90 },
+	{ "Rhea",   "Xenos C2", 90, "Styx-90", 90 },
+	{ "Elpis",  NULL,       80, "Styx-90", 90 },
+	{ "Zeus",   "Gunga",    65, "Styx-90", 90 },
+	{ "Kronos", "Gunga",    65, "Styx-65", 65 },
+	{ "Vejle",  "XCGPU",    45, "Styx-65", 65 },
+	{ "Oban",   NULL,       32, "Oban",     0 },
+};
+
+static const char *gpu_package(int type)
+{
+	if (is_elpis())
+		return "Elpis";
+
+	if (type == REV_JASPER)
+		return jasper_variant(1);
+
+	if (type >= 0 && type <= 8)
+		return gpuNames[type];
+
+	return NULL;
+}
+
+static int gpu_die(int type)
+{
+	const char *pkg = gpu_package(type);
+	unsigned int i;
+
+	if (!pkg)
+		return -1;
+
+	for (i = 0; i < sizeof(gpuDies) / sizeof(gpuDies[0]); i++)
+		if (strcmp(gpuDies[i].pkg, pkg) == 0)
+			return (int)i;
+
+	return -1;
+}
+
+static const char *gpu_die_name(int type)
+{
+	int i = gpu_die(type);
+
+	return (i >= 0) ? gpuDies[i].gpu : NULL;
+}
+
+static const char *gpu_detail(int type)
+{
+	static char buf[48];
+	int i = gpu_die(type);
+
+	if (i >= 0)
+		sprintf(buf, "%dnm%s", gpuDies[i].gpuNode, gpu_underfill(type));
+	else
+		sprintf(buf, "%dnm%s",
+			(type >= 0 && type <= 8) ? dieNodes[type].gpu : 0,
+			gpu_underfill(type));
+
+	return buf;
+}
+
 
 static unsigned int xenos_revision(void)
 {
@@ -828,68 +898,99 @@ static int nand_bad_blocks(void)
 
 #define SMC_HDR_LEN_OFF   0x78
 #define SMC_HDR_START_OFF 0x7C
-#define SMC_HACK_OFFSET   0x2DB0
-#define SMC_HACK_LEN      0x10
-#define SMC_CHUNK         0x200
-#define SMC_MAX_LEN       0x8000
+#define SMC_SIG_BASE      0x2DC0
+#define SMC_SIG_LEN       0xE1
+#define SMC_SIG_SITES     5
+#define SMC_VAR_WINDOW    0x1500
 
-static int smc_patched(void)
+#define SMC_VAR_SITES 8
+#define SMC_VAR_DISC  2
+
+static const struct
 {
-	unsigned char chunk[SMC_CHUNK];
-	unsigned char mark[SMC_HACK_LEN];
-	unsigned int keys[4] = { 0x42, 0x75, 0x4E, 0x79 };
-	uint32_t start = 0, len = 0, off;
-	unsigned int i, pos = 0;
-	int got = 0;
+	int type;
+	uint32_t len;
+	int sites;
+	unsigned short site[SMC_VAR_SITES];
+	unsigned char byte[SMC_VAR_SITES];
+	int disc;
+	unsigned short dsite[SMC_VAR_DISC];
+	unsigned char plusByte[SMC_VAR_DISC];
+	unsigned char altByte[SMC_VAR_DISC];
+	const char *alt;
+} smcVariant[] =
+{
+	{ REV_XENON, 0x3000, 8,
+		{ 0x0775, 0x0776, 0x0777, 0x0851, 0x0852, 0x0853, 0x1148, 0x1149 },
+		{ 0x02, 0x2D, 0xDD, 0x02, 0x2D, 0xC0, 0x02, 0x2D },
+		0, { 0 }, { 0 }, { 0 },
+		NULL },
+	{ REV_FALCON, 0x3000, 8,
+		{ 0x0156, 0x13C3, 0x13C8, 0x13CD, 0x13D2, 0x13D7, 0x13DC, 0x13E1 },
+		{ 0x12, 0x75, 0x04, 0x17, 0x75, 0x1A, 0x75, 0x80 },
+		2, { 0x1276, 0x1284 }, { 0x8A, 0x8A }, { 0xAF, 0xAF },
+		"CR4" },
+	{ REV_JASPER, 0x3000, 6,
+		{ 0x0072, 0x0073, 0x0074, 0x0156, 0x0157, 0x0158 },
+		{ 0x12, 0x2D, 0x73, 0x12, 0x2D, 0x7D },
+		2, { 0x127B, 0x1292 }, { 0x50, 0x50 }, { 0x54, 0x54 },
+		"CR4" },
+	{ REV_TRINITY, 0x3000, 8,
+		{ 0x00F1, 0x14C0, 0x14C5, 0x14CA, 0x14CF, 0x14D4, 0x14D9, 0x14DE },
+		{ 0x12, 0x75, 0x04, 0x6C, 0x75, 0x6F, 0x75, 0x80 },
+		2, { 0x1380, 0x1396 }, { 0x41, 0x41 }, { 0x60, 0x60 },
+		"CR4" },
+	{ REV_CORONA, 0x3800, 6,
+		{ 0x0059, 0x005A, 0x005B, 0x00F1, 0x00F2, 0x00F3 },
+		{ 0x12, 0x31, 0xF0, 0x12, 0x31, 0xFA },
+		2, { 0x1381, 0x1397 }, { 0x41, 0x41 }, { 0x50, 0x50 },
+		"CR4" },
+	{ REV_CORONA_PHISON, 0x3800, 6,
+		{ 0x0059, 0x005A, 0x005B, 0x00F1, 0x00F2, 0x00F3 },
+		{ 0x12, 0x31, 0xF0, 0x12, 0x31, 0xFA },
+		2, { 0x1381, 0x1397 }, { 0x41, 0x41 }, { 0x50, 0x50 },
+		"CR4" },
+};
 
-	if (xenon_logical_nand_data_ok() != 0)
-		return -1;
+static const char *smc_variant(void)
+{
+	static unsigned char win[SMC_VAR_WINDOW];
+	int type = xenon_get_console_type();
+	unsigned int i;
+	int k, len;
 
-	if (xenon_get_logical_nand_data(&len, SMC_HDR_LEN_OFF, sizeof(len)) == -1 ||
-	    xenon_get_logical_nand_data(&start, SMC_HDR_START_OFF, sizeof(start)) == -1)
-		return -1;
-
-	if (start == 0 || len > SMC_MAX_LEN || len < SMC_HACK_OFFSET + SMC_HACK_LEN)
-		return -1;
-
-	memset(mark, 0, sizeof(mark));
-
-	for (off = 0; off < SMC_HACK_OFFSET + SMC_HACK_LEN; off += SMC_CHUNK)
+	for (i = 0; i < sizeof(smcVariant) / sizeof(smcVariant[0]); i++)
 	{
-		unsigned int n = SMC_CHUNK;
+		if (smcVariant[i].type != type)
+			continue;
 
-		if (off + n > len)
-			n = len - off;
+		len = smc_read_window(win, 0, SMC_VAR_WINDOW);
 
-		if (xenon_get_logical_nand_data(chunk, start + off, n) == -1)
-			return -1;
+		if (len < 0 || (uint32_t)len != smcVariant[i].len)
+			return NULL;
 
-		for (i = 0; i < n; i++, pos++)
-		{
-			unsigned int mod = (unsigned int)chunk[i] * 0xFB;
-			unsigned char dec =
-				(unsigned char)(chunk[i] ^ (keys[pos & 3] & 0xFF));
+		for (k = 0; k < smcVariant[i].sites; k++)
+			if (win[smcVariant[i].site[k]] != smcVariant[i].byte[k])
+				return NULL;
 
-			keys[(pos + 1) & 3] += mod;
-			keys[(pos + 2) & 3] += (mod >> 8);
+		if (smcVariant[i].disc == 0)
+			return "SMC+";
 
-			if (pos >= SMC_HACK_OFFSET &&
-			    pos < SMC_HACK_OFFSET + SMC_HACK_LEN)
-			{
-				mark[pos - SMC_HACK_OFFSET] = dec;
-				got = 1;
-			}
-		}
+		for (k = 0; k < smcVariant[i].disc; k++)
+			if (win[smcVariant[i].dsite[k]] != smcVariant[i].plusByte[k])
+				break;
+
+		if (k == smcVariant[i].disc)
+			return "SMC+";
+
+		for (k = 0; k < smcVariant[i].disc; k++)
+			if (win[smcVariant[i].dsite[k]] != smcVariant[i].altByte[k])
+				return NULL;
+
+		return smcVariant[i].alt;
 	}
 
-	if (!got)
-		return -1;
-
-	for (i = 0; i < SMC_HACK_LEN; i++)
-		if (mark[i])
-			return 1;
-
-	return 0;
+	return NULL;
 }
 
 #define SMC_QUERY_VERSION 0x12
@@ -1554,13 +1655,14 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 #define BL_STAGE_2BL  2
 #define CB_X_RGH13    42069
-#define CB_A_MFG      9188
+#define CB_FLAG_MFG   0x01
 
 struct bl_chain
 {
 	int count;
 	int dev;
 	int cb_count;
+	int cb_mfg;
 	unsigned int cb_a;
 	unsigned int cb_b;
 	unsigned int cb_x;
@@ -1607,7 +1709,12 @@ static const struct bl_chain *bootloaders(void)
 		chain.build[chain.count] = (unsigned int)((hdr[2] << 8) | hdr[3]);
 
 		if ((hdr[1] & 0x0F) == BL_STAGE_2BL)
+		{
+			if (chain.cb_count == 0)
+				chain.cb_mfg = (hdr[7] & CB_FLAG_MFG) ? 1 : 0;
+
 			cb_build[chain.cb_count++] = chain.build[chain.count];
+		}
 
 		chain.count++;
 
@@ -1741,9 +1848,12 @@ static const char *exploit_method(void)
 	if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
 		return (cb_ldv() > JTAG_LDV_MAX) ? "RJTAG" : "JTAG";
 
+	if (xenon_get_console_type() == REV_XENON)
+		return "EXT_CLK";
+
 	if (bl->cb_count >= 2)
 	{
-		if (bl->cb_a == CB_A_MFG && bl->cb_b != CB_A_MFG)
+		if (bl->cb_mfg)
 			return "RGH2m";
 
 		if (xenon_get_console_type() == REV_TRINITY)
@@ -2201,15 +2311,14 @@ int main(){
 	draw_msmark(8, procRow * 16 + 1);
 
 	if (is_elpis())
-		printf("   Console: Xenon - Elpis (80nm)");
+		printf("   Console: Xenon - Elpis (%s)", gpu_detail(consoleType));
 	else if (consoleType >= 0 && consoleType <= 8)
-		printf("   Console: %s - %s (%dnm%s)",
+		printf("   Console: %s - %s (%s)",
 			 (consoleType == REV_JASPER) ? jasper_variant(0)
 						     : consoleNames[consoleType],
 			 (consoleType == REV_JASPER) ? jasper_variant(1)
 						     : gpuNames[consoleType],
-			 dieNodes[consoleType].gpu,
-			 gpu_underfill(consoleType));
+			 gpu_detail(consoleType));
 	else
 		printf("   Console: Unknown (PVR %08x)", mfspr(287));
 
@@ -2220,6 +2329,17 @@ int main(){
 		{
 			print_sep();
 			print_coloured(CONSOLE_WARN, method);
+
+			if (strstr(method, "JTAG"))
+			{
+				const char *wiring = smc_jtag_wiring();
+
+				if (wiring)
+				{
+					printf(" ");
+					print_coloured(CONSOLE_WARN, wiring);
+				}
+			}
 		}
 	}
 
@@ -2302,6 +2422,17 @@ int main(){
 	console_open();
 
 	printf("   GPU ID: %04x rev %02x", xenon_get_XenosID(), xenos_revision());
+
+	{
+		const char *die = gpu_die_name(consoleType);
+
+		if (die)
+		{
+			print_sep();
+			printf("%s", die);
+		}
+	}
+
 	print_sep();
 	printf("Bridge: %02x", xenon_get_PCIBridgeRevisionID());
 	print_sep();
@@ -2322,12 +2453,19 @@ int main(){
 
 	print_sep();
 
-	if (consoleType == REV_JASPER)
-		printf("eDRAM: 10MB (%s)\n", jasper_variant(2));
-	else if (is_elpis())
-		printf("eDRAM: 10MB (80nm)\n");
-	else
-		printf("eDRAM: 10MB%s\n", die_node(consoleType, 2));
+	{
+		int die = gpu_die(consoleType);
+
+		if (die >= 0 && gpuDies[die].edramNode)
+			printf("eDRAM: 10MB (%s, %dnm)\n",
+				gpuDies[die].edram, gpuDies[die].edramNode);
+		else if (die >= 0)
+			printf("eDRAM: 10MB (%s, on-die)\n", gpuDies[die].edram);
+		else if (consoleType == REV_JASPER)
+			printf("eDRAM: 10MB (%s)\n", jasper_variant(2));
+		else
+			printf("eDRAM: 10MB%s\n", die_node(consoleType, 2));
+	}
 
 	if (sfc.initialized == SFCX_INITIALIZED)
 	{
@@ -2345,8 +2483,15 @@ int main(){
 			print_sep();
 			printf("SMC: %s", smc);
 
-			if (smc_patched() == 1)
-				print_coloured(CONSOLE_WARN, " Patched");
+			{
+				const char *var = smc_variant();
+
+				if (var)
+				{
+					printf(" ");
+					print_coloured(CONSOLE_WARN, var);
+				}
+			}
 		}
 
 		if (bad >= 0)
