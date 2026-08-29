@@ -417,6 +417,23 @@ static int zero_fuse(void)
 	return 1;
 }
 
+#define CB_LDV_FUSE     2
+#define JTAG_LDV_MAX    5
+
+static int cb_ldv(void)
+{
+	u64 v = xenon_secotp_read_line(CB_LDV_FUSE);
+	int bits = 0;
+
+	while (v)
+	{
+		bits += v & 1;
+		v >>= 1;
+	}
+
+	return bits / 4;
+}
+
 static int is_elpis(void)
 {
 	return xenon_get_console_type() == REV_XENON &&
@@ -1656,7 +1673,7 @@ static const char *exploit_method(void)
 		return NULL;
 
 	if (memcmp(buf, fuseline0, sizeof(fuseline0)) == 0)
-		return "JTAG";
+		return (cb_ldv() > JTAG_LDV_MAX) ? "RJTAG" : "JTAG";
 
 	if (bl->cb_count >= 2)
 	{
