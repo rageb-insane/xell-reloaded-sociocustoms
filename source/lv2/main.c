@@ -745,10 +745,39 @@ static const char *av_region_name(int region)
 
 #define NAND_BLOCK_SCAN_MAX 4096
 
+static unsigned int nandXellOffset;
+static int nandXellBad;
+
+static unsigned int xell_nand_offset(void)
+{
+	unsigned char footer[XELL_FOOTER_LENGTH];
+	int i;
+
+	if (xenon_logical_nand_data_ok() != 0)
+		return 0;
+
+	for (i = 0; i < XELL_OFFSET_COUNT; i++)
+	{
+		if (xenon_get_logical_nand_data(footer,
+				xelloffsets[i] + XELL_FOOTER_OFFSET,
+				XELL_FOOTER_LENGTH) == -1)
+			continue;
+
+		if (memcmp(footer, XELL_FOOTER, XELL_FOOTER_LENGTH) == 0)
+			return xelloffsets[i];
+	}
+
+	return 0;
+}
+
 static int nand_bad_blocks(void)
 {
 	static unsigned char page[MAX_PAGE_SZ];
 	int block, bad = 0, blocks = sfc.size_blocks;
+	int first = -1, last = -1;
+
+	nandXellOffset = 0;
+	nandXellBad = 0;
 
 	if (sfc.initialized != SFCX_INITIALIZED)
 		return -1;
@@ -756,12 +785,25 @@ static int nand_bad_blocks(void)
 	if (blocks <= 0 || blocks > NAND_BLOCK_SCAN_MAX)
 		return -1;
 
+	nandXellOffset = xell_nand_offset();
+
+	if (nandXellOffset && sfc.block_sz > 0)
+	{
+		first = nandXellOffset / sfc.block_sz;
+		last = (nandXellOffset + XELL_SIZE - 1) / sfc.block_sz;
+	}
+
 	for (block = 0; block < blocks; block++)
 	{
 		int status = sfcx_read_page(page, sfcx_block_to_address(block), 1);
 
-		if (!SFCX_SUCCESS(status) || !sfcx_is_pagevalid(page))
-			bad++;
+		if (SFCX_SUCCESS(status) && sfcx_is_pagevalid(page))
+			continue;
+
+		bad++;
+
+		if (first >= 0 && block >= first && block <= last)
+			nandXellBad = 1;
 	}
 
 	return bad;
@@ -2223,11 +2265,28 @@ int main(){
 
 		if (bad >= 0)
 		{
-			char text[24];
+			char text[40];
 
 			print_sep();
 			sprintf(text, "%d Bad Block%s", bad, (bad == 1) ? "" : "s");
 			print_coloured(bad ? CONSOLE_COLOR_RED : console_color[1], text);
+		}
+
+		if (nandXellOffset)
+		{
+			char text[40];
+
+			print_sep();
+
+			if (nandXellBad)
+			{
+				sprintf(text, "XeLL @ 0x%X Damaged", nandXellOffset);
+				print_coloured(CONSOLE_COLOR_RED, text);
+			}
+			else
+			{
+				printf("XeLL @ 0x%X", nandXellOffset);
+			}
 		}
 
 		printf("\n");
