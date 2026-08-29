@@ -826,6 +826,72 @@ static int nand_bad_blocks(void)
 	return bad;
 }
 
+#define SMC_HDR_LEN_OFF   0x78
+#define SMC_HDR_START_OFF 0x7C
+#define SMC_HACK_OFFSET   0x2DB0
+#define SMC_HACK_LEN      0x10
+#define SMC_CHUNK         0x200
+#define SMC_MAX_LEN       0x8000
+
+static int smc_patched(void)
+{
+	unsigned char chunk[SMC_CHUNK];
+	unsigned char mark[SMC_HACK_LEN];
+	unsigned int keys[4] = { 0x42, 0x75, 0x4E, 0x79 };
+	uint32_t start = 0, len = 0, off;
+	unsigned int i, pos = 0;
+	int got = 0;
+
+	if (xenon_logical_nand_data_ok() != 0)
+		return -1;
+
+	if (xenon_get_logical_nand_data(&len, SMC_HDR_LEN_OFF, sizeof(len)) == -1 ||
+	    xenon_get_logical_nand_data(&start, SMC_HDR_START_OFF, sizeof(start)) == -1)
+		return -1;
+
+	if (start == 0 || len > SMC_MAX_LEN || len < SMC_HACK_OFFSET + SMC_HACK_LEN)
+		return -1;
+
+	memset(mark, 0, sizeof(mark));
+
+	for (off = 0; off < SMC_HACK_OFFSET + SMC_HACK_LEN; off += SMC_CHUNK)
+	{
+		unsigned int n = SMC_CHUNK;
+
+		if (off + n > len)
+			n = len - off;
+
+		if (xenon_get_logical_nand_data(chunk, start + off, n) == -1)
+			return -1;
+
+		for (i = 0; i < n; i++, pos++)
+		{
+			unsigned int mod = (unsigned int)chunk[i] * 0xFB;
+			unsigned char dec =
+				(unsigned char)(chunk[i] ^ (keys[pos & 3] & 0xFF));
+
+			keys[(pos + 1) & 3] += mod;
+			keys[(pos + 2) & 3] += (mod >> 8);
+
+			if (pos >= SMC_HACK_OFFSET &&
+			    pos < SMC_HACK_OFFSET + SMC_HACK_LEN)
+			{
+				mark[pos - SMC_HACK_OFFSET] = dec;
+				got = 1;
+			}
+		}
+	}
+
+	if (!got)
+		return -1;
+
+	for (i = 0; i < SMC_HACK_LEN; i++)
+		if (mark[i])
+			return 1;
+
+	return 0;
+}
+
 #define SMC_QUERY_VERSION 0x12
 
 static const char *smc_version(void)
@@ -2278,6 +2344,9 @@ int main(){
 		{
 			print_sep();
 			printf("SMC: %s", smc);
+
+			if (smc_patched() == 1)
+				print_coloured(CONSOLE_WARN, " Patched");
 		}
 
 		if (bad >= 0)
