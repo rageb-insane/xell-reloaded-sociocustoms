@@ -1936,9 +1936,6 @@ static const char *exploit_method(void)
 		if (bl->cb_mfg)
 			return "RGH2m";
 
-		if (xenon_get_console_type() == REV_TRINITY)
-			return "RGH";
-
 		return "RGH2";
 	}
 
