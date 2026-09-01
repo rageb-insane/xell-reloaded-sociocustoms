@@ -83,6 +83,7 @@ static int panel_right(void)
 }
 
 #define PANEL_MIN_COLS 100
+#define FUSE_WIDE_COLS 88
 
 static int panel_fits(void)
 {
@@ -2562,13 +2563,45 @@ int main(){
 
 	haveVfuse = read_vfuses(vfuse);
 
-	if (haveVfuse)
-		printf("Fuses:                   Virtual Fuses:\n");
-	else
+	if (!haveVfuse)
+	{
 		printf("Fuses:\n");
 
-	if (haveVfuse)
+		for (i=0; i<6; ++i){
+			printf("   %02d: ", i);
+			print_fuse_word(fuseline[i],
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("     %02d: ", i + 6);
+			print_fuse_word(fuseline[i + 6],
+				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
+			printf("\n");
+		}
+	}
+	else if (console_get_cursor_max_x() >= FUSE_WIDE_COLS)
 	{
+		printf("Fuses:                   Virtual                                    Virtual\n");
+
+		for (i = 0; i < 6; ++i)
+		{
+			printf("   %02d: ", i);
+			print_fuse_word(fuseline[i],
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("  ");
+			print_fuse_word(vfuse_word(vfuse, i),
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("     %02d: ", i + 6);
+			print_fuse_word(fuseline[i + 6],
+				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
+			printf("  ");
+			print_fuse_word(vfuse_word(vfuse, i + 6),
+				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
+			printf("\n");
+		}
+	}
+	else
+	{
+		printf("Fuses:                   Virtual Fuses:\n");
+
 		for (i = 0; i < 12; ++i)
 		{
 			printf("   %02d: ", i);
@@ -2577,18 +2610,6 @@ int main(){
 			printf("  ");
 			print_fuse_word(vfuse_word(vfuse, i),
 				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
-			printf("\n");
-		}
-	}
-	else
-	{
-		for (i=0; i<6; ++i){
-			printf("   %02d: ", i);
-			print_fuse_word(fuseline[i],
-				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
-			printf("     %02d: ", i + 6);
-			print_fuse_word(fuseline[i + 6],
-				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
 			printf("\n");
 		}
 	}
