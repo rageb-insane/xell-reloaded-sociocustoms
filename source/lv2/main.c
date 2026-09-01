@@ -1947,7 +1947,28 @@ static const char *exploit_method(void)
 
 #define KEY_COLOUR CONSOLE_COLOR_RED
 
-static void print_key_plain(const char *name, unsigned char *data)
+#define VFUSE_NONE     0
+#define VFUSE_MATCH    1
+#define VFUSE_MISMATCH 2
+
+static int vfuse_check(const unsigned char *virt)
+{
+	unsigned char real[0x10];
+
+	if (zero_fuse())
+		return VFUSE_NONE;
+
+	memset(real, '\0', sizeof(real));
+
+	if (cpu_get_key(real) != 0)
+		return VFUSE_NONE;
+
+	return (memcmp(real, virt, sizeof(real)) == 0)
+		? VFUSE_MATCH : VFUSE_MISMATCH;
+}
+
+static void print_key_plain(const char *name, unsigned char *data,
+			    const char *note, unsigned int colour)
 {
 	int i;
 
@@ -1956,6 +1977,12 @@ static void print_key_plain(const char *name, unsigned char *data)
 
 	for (i = 0; i < 16; i++)
 		printf("%02X", data[i]);
+
+	if (note)
+	{
+		print_sep();
+		print_coloured(colour, note);
+	}
 
 	printf("\n");
 }
@@ -2117,7 +2144,24 @@ static void print_console_keys(void)
 
 	memset(key, '\0', sizeof(key));
 	if (get_virtual_cpukey(key) == 0)
-		print_key_plain("Virtual CPU Key", key);
+	{
+		switch (vfuse_check(key))
+		{
+		case VFUSE_MATCH:
+			print_key_plain("Virtual CPU Key", key,
+					"Matches Fuses", CONSOLE_SUCCESS);
+			break;
+
+		case VFUSE_MISMATCH:
+			print_key_plain("Virtual CPU Key", key,
+					"Wrong Console", CONSOLE_COLOR_RED);
+			break;
+
+		default:
+			print_key_plain("Virtual CPU Key", key, NULL, 0);
+			break;
+		}
+	}
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
@@ -2143,7 +2187,7 @@ static void print_console_keys(void)
 	memset(key, '\0', sizeof(key));
 	n = sizeof(key);
 	if (kv_get_key(XEKEY_DVD_KEY, key, &n, kv) == 0)
-		print_key_plain("DVD Key", key);
+		print_key_plain("DVD Key", key, NULL, 0);
 
 	n = 0x0C;
 	if (kv_get_key(XEKEY_CONSOLE_SERIAL_NUMBER, key, &n, kv) == 0)
