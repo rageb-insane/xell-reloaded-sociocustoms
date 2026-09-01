@@ -2545,9 +2545,11 @@ int main(){
 	printf("\n");
 
 #ifndef NO_PRINT_CONFIG
-	printf("Fuses:\n");
 	u64 fuseline[12];
 	char *fusestr = FUSES;
+	unsigned char vfuse[VFUSES_LEN];
+	int haveVfuse;
+
 	for (i=0; i<12; ++i){
 		unsigned int hi,lo;
 
@@ -2558,34 +2560,36 @@ int main(){
 		fusestr += sprintf(fusestr, "fuseset %02d: %08x%08x\n", i, hi, lo);
 	}
 
-	for (i=0; i<6; ++i){
-		printf("   %02d: ", i);
-		print_fuse_word(fuseline[i],
-			i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
-		printf("     %02d: ", i + 6);
-		print_fuse_word(fuseline[i + 6],
-			(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
-		printf("\n");
-	}
+	haveVfuse = read_vfuses(vfuse);
 
+	if (haveVfuse)
+		printf("Fuses:                   Virtual Fuses:\n");
+	else
+		printf("Fuses:\n");
+
+	if (haveVfuse)
 	{
-		unsigned char vf[VFUSES_LEN];
-
-		if (read_vfuses(vf))
+		for (i = 0; i < 12; ++i)
 		{
-			printf("\nVirtual Fuses:\n");
-
-			for (i = 0; i < 6; ++i)
-			{
-				printf("   %02d: ", i);
-				print_fuse_word(vfuse_word(vf, i),
-					i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
-				printf("     %02d: ", i + 6);
-				print_fuse_word(vfuse_word(vf, i + 6),
-					(i + 6) >= LDV_FUSE_FIRST &&
-					(i + 6) <= LDV_FUSE_LAST);
-				printf("\n");
-			}
+			printf("   %02d: ", i);
+			print_fuse_word(fuseline[i],
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("  ");
+			print_fuse_word(vfuse_word(vfuse, i),
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("\n");
+		}
+	}
+	else
+	{
+		for (i=0; i<6; ++i){
+			printf("   %02d: ", i);
+			print_fuse_word(fuseline[i],
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("     %02d: ", i + 6);
+			print_fuse_word(fuseline[i + 6],
+				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
+			printf("\n");
 		}
 	}
 
