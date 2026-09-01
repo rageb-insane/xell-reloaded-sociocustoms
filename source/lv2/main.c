@@ -83,7 +83,7 @@ static int panel_right(void)
 }
 
 #define PANEL_MIN_COLS 100
-#define FUSE_WIDE_COLS 88
+#define FUSE_WIDE_COLS 100
 
 static int panel_fits(void)
 {
@@ -1781,9 +1781,6 @@ static const struct bl_chain *bootloaders(void)
 		if ((hdr[1] & 0x0F) < 2 || (hdr[1] & 0x0F) > 7)
 			break;
 
-		if (hdr[0] != 'C')
-			chain.dev = 1;
-
 		chain.magic[chain.count][0] =
 			(hdr[0] >= 'A' && hdr[0] <= 'Z') ? hdr[0] : 'S';
 		chain.magic[chain.count][1] = hdr[1];
@@ -1792,7 +1789,10 @@ static const struct bl_chain *bootloaders(void)
 		if ((hdr[1] & 0x0F) == BL_STAGE_2BL)
 		{
 			if (chain.cb_count == 0)
+			{
 				chain.cb_mfg = (hdr[7] & CB_FLAG_MFG) ? 1 : 0;
+				chain.dev = (hdr[0] != 'C') ? 1 : 0;
+			}
 
 			cb_build[chain.cb_count++] = chain.build[chain.count];
 		}
@@ -2579,20 +2579,20 @@ int main(){
 	}
 	else if (console_get_cursor_max_x() >= FUSE_WIDE_COLS)
 	{
-		printf("Fuses:                   Virtual                                    Virtual\n");
+		printf("Fuses:                                               Virtual Fuses:\n");
 
 		for (i = 0; i < 6; ++i)
 		{
 			printf("   %02d: ", i);
 			print_fuse_word(fuseline[i],
 				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
-			printf("  ");
-			print_fuse_word(vfuse_word(vfuse, i),
-				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
 			printf("     %02d: ", i + 6);
 			print_fuse_word(fuseline[i + 6],
 				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
-			printf("  ");
+			printf("     %02d: ", i);
+			print_fuse_word(vfuse_word(vfuse, i),
+				i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+			printf("     %02d: ", i + 6);
 			print_fuse_word(vfuse_word(vfuse, i + 6),
 				(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
 			printf("\n");
