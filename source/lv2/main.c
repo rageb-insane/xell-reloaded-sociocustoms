@@ -1945,6 +1945,72 @@ static const char *exploit_method(void)
 	return "RGH";
 }
 
+static u64 vfuse_word(const unsigned char *vf, int line)
+{
+	u64 v = 0;
+	int i;
+
+	for (i = 0; i < 8; i++)
+		v = (v << 8) | vf[line * 8 + i];
+
+	return v;
+}
+
+static int vfuses_valid(const unsigned char *vf)
+{
+	static const unsigned char line0[8] =
+		{ 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+	if (memcmp(vf, line0, sizeof(line0)) != 0)
+		return 0;
+
+	if (memcmp(vf + 3 * 8, vf + 4 * 8, 8) != 0)
+		return 0;
+
+	if (memcmp(vf + 5 * 8, vf + 6 * 8, 8) != 0)
+		return 0;
+
+	return vfuse_word(vf, 3) != 0;
+}
+
+static int read_vfuses(unsigned char *out)
+{
+	uint32_t slot_offset = 0, slot_size = 0;
+	uint16_t slot_count = 0;
+	int i;
+
+	if (xenon_logical_nand_data_ok() != 0)
+		return 0;
+
+	if (xenon_get_logical_nand_data(out, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
+	    vfuses_valid(out))
+		return 1;
+
+	if (xenon_get_logical_nand_data(&slot_offset, PATCH_SLOT_TABLE,
+					sizeof(slot_offset)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_count, PATCH_SLOT_TABLE + 4,
+					sizeof(slot_count)) == -1 ||
+	    xenon_get_logical_nand_data(&slot_size, PATCH_SLOT_TABLE + 12,
+					sizeof(slot_size)) == -1)
+		return 0;
+
+	if (slot_size == 0 || slot_count == 0 || slot_count > PATCH_SLOTS_MAX)
+		return 0;
+
+	for (i = 0; i < (int)slot_count; i++)
+	{
+		uint32_t at = slot_offset + (uint32_t)i * slot_size;
+
+		if (xenon_get_logical_nand_data(out, at, VFUSES_LEN) == -1)
+			continue;
+
+		if (vfuses_valid(out))
+			return 1;
+	}
+
+	return 0;
+}
+
 #define KEY_COLOUR CONSOLE_COLOR_RED
 
 #define VFUSE_NONE     0
@@ -2500,6 +2566,27 @@ int main(){
 		print_fuse_word(fuseline[i + 6],
 			(i + 6) >= LDV_FUSE_FIRST && (i + 6) <= LDV_FUSE_LAST);
 		printf("\n");
+	}
+
+	{
+		unsigned char vf[VFUSES_LEN];
+
+		if (read_vfuses(vf))
+		{
+			printf("\nVirtual Fuses:\n");
+
+			for (i = 0; i < 6; ++i)
+			{
+				printf("   %02d: ", i);
+				print_fuse_word(vfuse_word(vf, i),
+					i >= LDV_FUSE_FIRST && i <= LDV_FUSE_LAST);
+				printf("     %02d: ", i + 6);
+				print_fuse_word(vfuse_word(vf, i + 6),
+					(i + 6) >= LDV_FUSE_FIRST &&
+					(i + 6) <= LDV_FUSE_LAST);
+				printf("\n");
+			}
+		}
 	}
 
 	{
