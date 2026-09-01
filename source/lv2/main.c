@@ -1976,16 +1976,34 @@ static int vfuses_valid(const unsigned char *vf)
 
 static int read_vfuses(unsigned char *out)
 {
+	static unsigned char cache[VFUSES_LEN];
+	static int state;
+
 	uint32_t slot_offset = 0, slot_size = 0;
 	uint16_t slot_count = 0;
 	int i;
+
+	if (state)
+	{
+		if (state < 0)
+			return 0;
+
+		memcpy(out, cache, VFUSES_LEN);
+		return 1;
+	}
+
+	state = -1;
 
 	if (xenon_logical_nand_data_ok() != 0)
 		return 0;
 
 	if (xenon_get_logical_nand_data(out, VFUSES_JTAG_OFFSET, VFUSES_LEN) != -1 &&
 	    vfuses_valid(out))
+	{
+		memcpy(cache, out, VFUSES_LEN);
+		state = 1;
 		return 1;
+	}
 
 	if (xenon_get_logical_nand_data(&slot_offset, PATCH_SLOT_TABLE,
 					sizeof(slot_offset)) == -1 ||
@@ -2006,7 +2024,11 @@ static int read_vfuses(unsigned char *out)
 			continue;
 
 		if (vfuses_valid(out))
+		{
+			memcpy(cache, out, VFUSES_LEN);
+			state = 1;
 			return 1;
+		}
 	}
 
 	return 0;
@@ -2536,6 +2558,16 @@ int main(){
 				{
 					printf(" ");
 					print_coloured(CONSOLE_WARN, wiring);
+				}
+			}
+
+			{
+				unsigned char vf[VFUSES_LEN];
+
+				if (read_vfuses(vf))
+				{
+					print_sep();
+					print_coloured(CONSOLE_WARN, "Emulated Fuses");
 				}
 			}
 		}
