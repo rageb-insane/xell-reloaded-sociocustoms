@@ -2031,26 +2031,6 @@ static int read_vfuses(unsigned char *out)
 
 #define KEY_COLOUR CONSOLE_COLOR_RED
 
-#define VFUSE_NONE     0
-#define VFUSE_MATCH    1
-#define VFUSE_MISMATCH 2
-
-static int vfuse_check(const unsigned char *virt)
-{
-	unsigned char real[0x10];
-
-	if (zero_fuse())
-		return VFUSE_NONE;
-
-	memset(real, '\0', sizeof(real));
-
-	if (cpu_get_key(real) != 0)
-		return VFUSE_NONE;
-
-	return (memcmp(real, virt, sizeof(real)) == 0)
-		? VFUSE_MATCH : VFUSE_MISMATCH;
-}
-
 static void print_key_plain(const char *name, unsigned char *data,
 			    const char *note, unsigned int colour)
 {
@@ -2071,7 +2051,8 @@ static void print_key_plain(const char *name, unsigned char *data,
 	printf("\n");
 }
 
-static void print_key_hi(const char *name, unsigned char *data)
+static void print_key_hi(const char *name, unsigned char *data,
+			 const char *note, unsigned int colour)
 {
 	unsigned int bg = console_color[0], fg = console_color[1];
 	int i;
@@ -2083,6 +2064,12 @@ static void print_key_hi(const char *name, unsigned char *data)
 	for (i = 0; i < 16; i++)
 		printf("%02X", data[i]);
 	console_set_colors(bg, fg);
+
+	if (note)
+	{
+		print_sep();
+		print_coloured(colour, note);
+	}
 
 	printf("\n");
 }
@@ -2200,15 +2187,46 @@ static void read_mfg_date(unsigned char *kv)
 static void print_console_keys(void)
 {
 	unsigned char key[0x10];
+	unsigned char vkey[0x10];
 	unsigned char region[0x02];
 	unsigned char *kv;
+	char vhex[33];
+	int haveKey, haveVkey, vInline = 0, vMismatch = 0;
 	int n, r;
 
 	printf("\n");
 
 	memset(key, '\0', sizeof(key));
-	if (cpu_get_key(key) == 0)
-		print_key_hi("CPU Key", key);
+	memset(vkey, '\0', sizeof(vkey));
+
+	haveKey = (cpu_get_key(key) == 0);
+	haveVkey = (get_virtual_cpukey(vkey) == 0);
+
+	if (haveKey && haveVkey)
+	{
+		if (zero_fuse())
+			vInline = 1;
+		else if (memcmp(key, vkey, sizeof(key)) == 0)
+			vInline = 2;
+		else
+			vMismatch = 1;
+	}
+
+	if (haveKey)
+	{
+		if (vInline == 1)
+		{
+			for (n = 0; n < 0x10; n++)
+				sprintf(vhex + n * 2, "%02X", vkey[n]);
+
+			print_key_hi("CPU Key", key, vhex, console_color[1]);
+		}
+		else if (vInline == 2)
+			print_key_hi("CPU Key", key, "Virtual Key Matches",
+				     CONSOLE_SUCCESS);
+		else
+			print_key_hi("CPU Key", key, NULL, 0);
+	}
 
 	if (xenon_logical_nand_data_ok() != 0)
 	{
@@ -2226,26 +2244,11 @@ static void print_console_keys(void)
 		return;
 	}
 
-	memset(key, '\0', sizeof(key));
-	if (get_virtual_cpukey(key) == 0)
-	{
-		switch (vfuse_check(key))
-		{
-		case VFUSE_MATCH:
-			print_key_plain("Virtual CPU Key", key,
-					"Matches Fuses", CONSOLE_SUCCESS);
-			break;
-
-		case VFUSE_MISMATCH:
-			print_key_plain("Virtual CPU Key", key,
-					"Wrong Console", CONSOLE_COLOR_RED);
-			break;
-
-		default:
-			print_key_plain("Virtual CPU Key", key, NULL, 0);
-			break;
-		}
-	}
+	if (vMismatch)
+		print_key_plain("Virtual CPU Key", vkey, "Wrong Console",
+				CONSOLE_COLOR_RED);
+	else if (haveVkey && !haveKey)
+		print_key_plain("Virtual CPU Key", vkey, NULL, 0);
 
 	kv = malloc(KV_FLASH_SIZE);
 	if (kv == NULL)
