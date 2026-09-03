@@ -497,7 +497,7 @@ static int FindPartitions(int device) {
 		}
 	}
 #ifdef FS_ISO9660
-	if (devnum == 0) {
+	if (devnum == 0 && device >= DEVICE_USB_0 && device <= DEVICE_USB_2) {
 		debug_printf("Trying : iso9660 image\n");
 		AddPartition(0, device, T_ISO9660, &devnum);
 	}

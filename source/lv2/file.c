@@ -196,7 +196,7 @@ int try_load_local(char *filename, int filetype) {
   int i;
 
   if (bootDevice[0]) {
-    sprintf(path, "%s:/%s", bootDevice, rel);
+    snprintf(path, sizeof(path), "%s:/%s", bootDevice, rel);
 
     if (try_load_file(path, filetype) >= 0)
       return 0;
@@ -209,7 +209,7 @@ int try_load_local(char *filename, int filetype) {
     if (bootDevice[0] && !strcmp(devoptab_list[i]->name, bootDevice))
       continue;
 
-    sprintf(path, "%s:/%s", devoptab_list[i]->name, rel);
+    snprintf(path, sizeof(path), "%s:/%s", devoptab_list[i]->name, rel);
 
     if (try_load_file(path, filetype) >= 0)
       return 0;
