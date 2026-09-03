@@ -39,6 +39,15 @@ struct filenames filelist[] = {{"kboot.conf", TYPE_KBOOT},
                                {"updflash.bin",TYPE_NANDIMAGE},
                                {NULL, TYPE_INVALID}};
 
+static char bootDevice[16];
+
+static const char *strip_slashes(const char *path) {
+  while (*path == '/')
+    path++;
+
+  return path;
+}
+
 void wait_and_cleanup_line() {
   uint64_t t = mftb();
   while (tb_diff_msec(mftb(), t) < 200) { // yield to network
@@ -163,11 +172,48 @@ int try_load_file(char *filename, int filetype) {
     elf_setArgcArgv(argc, argv);
   }
 
+  if (filetype == TYPE_KBOOT) {
+    char *colon = strchr(filename, ':');
+
+    if (colon && (colon - filename) < (int)sizeof(bootDevice)) {
+      memcpy(bootDevice, filename, colon - filename);
+      bootDevice[colon - filename] = 0;
+    }
+  }
+
   ret = launch_file(buf, r, filetype);
   
   fclose(f);
   free(buf);
   return ret;
+}
+
+int try_load_local(char *filename, int filetype) {
+  char path[300];
+  const char *rel = strip_slashes(filename);
+  int i;
+
+  if (bootDevice[0]) {
+    sprintf(path, "%s:/%s", bootDevice, rel);
+
+    if (try_load_file(path, filetype) >= 0)
+      return 0;
+  }
+
+  for (i = 3; i < 16; i++) {
+    if (!devoptab_list[i]->structSize)
+      continue;
+
+    if (bootDevice[0] && !strcmp(devoptab_list[i]->name, bootDevice))
+      continue;
+
+    sprintf(path, "%s:/%s", devoptab_list[i]->name, rel);
+
+    if (try_load_file(path, filetype) >= 0)
+      return 0;
+  }
+
+  return -1;
 }
 
 void fileloop() {

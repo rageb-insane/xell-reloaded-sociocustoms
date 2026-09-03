@@ -78,8 +78,12 @@ int kboot_loadfile(char *filename, int type)
 	/* If filename includes ':' it's seen as valid mountname */
 	if(strrchr(filename,':')!= NULL)
 		ret = try_load_file(filename,type);
-	else
-		ret = boot_tftp(boot_server_name(),filename,type);
+	else {
+		ret = try_load_local(filename,type);
+
+		if (ret < 0)
+			ret = boot_tftp(boot_server_name(),filename,type);
+	}
 		
 	return ret;
 }
