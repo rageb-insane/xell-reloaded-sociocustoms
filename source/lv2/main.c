@@ -1297,21 +1297,21 @@ static int security_sectors_present(void)
 #define SMART_RETURN_STATUS 0xDA
 #define ATA_CMD_SMART       0xB0
 
-static void ata_reg_write(int reg, uint8_t val)
+static void ata_reg_write(struct xenon_ata_device *dev, int reg, uint8_t val)
 {
-	*(volatile uint8_t *)(ata.ioaddress + reg) = val;
+	*(volatile uint8_t *)(dev->ioaddress + reg) = val;
 }
 
-static uint8_t ata_reg_read(int reg)
+static uint8_t ata_reg_read(struct xenon_ata_device *dev, int reg)
 {
-	return *(volatile uint8_t *)(ata.ioaddress + reg);
+	return *(volatile uint8_t *)(dev->ioaddress + reg);
 }
 
-static int ata_wait_not_busy(void)
+static int ata_wait_not_busy(struct xenon_ata_device *dev)
 {
 	uint64_t t = mftb();
 
-	while (ata_reg_read(XENON_ATA_REG_STATUS) & 0x80)
+	while (ata_reg_read(dev, XENON_ATA_REG_STATUS) & 0x80)
 		if (tb_diff_msec(mftb(), t) > SMART_TIMEOUT_MSEC)
 			return 0;
 
@@ -1340,14 +1340,14 @@ static unsigned int hours_colour(uint32_t hours)
 	return console_color[1];
 }
 
-static int ata_wait_drq(void)
+static int ata_wait_drq(struct xenon_ata_device *dev)
 {
 	uint64_t t = mftb();
 	uint8_t status;
 
 	for (;;)
 	{
-		status = ata_reg_read(XENON_ATA_REG_STATUS);
+		status = ata_reg_read(dev, XENON_ATA_REG_STATUS);
 
 		if (status & 0x01)
 			return 0;
@@ -1358,6 +1358,84 @@ static int ata_wait_drq(void)
 		if (tb_diff_msec(mftb(), t) > SMART_TIMEOUT_MSEC)
 			return 0;
 	}
+}
+
+#define ATA_CMD_IDENTIFY        0xEC
+#define ATA_CMD_IDENTIFY_PACKET 0xA1
+#define ID_REV_OFF   46
+#define ID_REV_LEN   8
+#define ID_MODEL_OFF 54
+#define ID_CAL_LEN   8
+
+static void id_copy(const unsigned char *buf, int off, int len, int swap,
+		    char *out)
+{
+	int i;
+
+	for (i = 0; i < len; i++)
+		out[i] = (char)buf[off + (swap ? (i ^ 1) : i)];
+
+	out[len] = '\0';
+}
+
+static int ata_identify(struct xenon_ata_device *dev, unsigned char *buf,
+			int packet)
+{
+	int i;
+
+	if (!dev->ioaddress || !ata_wait_not_busy(dev))
+		return 0;
+
+	ata_reg_write(dev, XENON_ATA_REG_DISK, packet ? 0xA0 : 0xE0);
+	ata_reg_write(dev, XENON_ATA_REG_SECTORS, 0);
+	ata_reg_write(dev, XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(dev, XENON_ATA_REG_LBAMID, 0);
+	ata_reg_write(dev, XENON_ATA_REG_LBAHIGH, 0);
+	ata_reg_write(dev, XENON_ATA_REG_CMD,
+		packet ? ATA_CMD_IDENTIFY_PACKET : ATA_CMD_IDENTIFY);
+
+	if (!ata_wait_not_busy(dev) || !ata_wait_drq(dev))
+		return 0;
+
+	for (i = 0; i < 128; i++)
+		((uint32_t *)buf)[i] =
+			*(volatile uint32_t *)(dev->ioaddress + XENON_ATA_REG_DATA);
+
+	return 1;
+}
+
+static const char *drive_firmware(struct xenon_ata_device *dev, int packet)
+{
+	static unsigned char buf[XENON_DISK_SECTOR_SIZE] __attribute__((aligned(128)));
+	static char rev[ID_REV_LEN + 1];
+	char cal[ID_CAL_LEN + 1];
+	const char *known = ata_model(dev);
+	int swap, n;
+
+	n = (int)strlen(known);
+
+	if (n > ID_CAL_LEN)
+		n = ID_CAL_LEN;
+
+	if (n < 4 || !ata_identify(dev, buf, packet))
+		return NULL;
+
+	for (swap = 0; swap < 2; swap++)
+	{
+		id_copy(buf, ID_MODEL_OFF, n, swap, cal);
+
+		if (memcmp(cal, known, n) != 0)
+			continue;
+
+		id_copy(buf, ID_REV_OFF, ID_REV_LEN, swap, rev);
+
+		for (n = ID_REV_LEN - 1; n >= 0 && rev[n] == ' '; n--)
+			rev[n] = '\0';
+
+		return rev[0] ? rev : NULL;
+	}
+
+	return NULL;
 }
 
 static int smart_table_ok(const unsigned char *buf)
@@ -1385,18 +1463,18 @@ static int smart_read_table(unsigned char *buf, uint8_t feature)
 {
 	int i;
 
-	if (!ata.ioaddress || !ata_wait_not_busy())
+	if (!ata.ioaddress || !ata_wait_not_busy(&ata))
 		return 0;
 
-	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
-	ata_reg_write(XENON_ATA_REG_FEATURES, feature);
-	ata_reg_write(XENON_ATA_REG_SECTORS, 1);
-	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
-	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
-	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
-	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+	ata_reg_write(&ata, XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(&ata, XENON_ATA_REG_FEATURES, feature);
+	ata_reg_write(&ata, XENON_ATA_REG_SECTORS, 1);
+	ata_reg_write(&ata, XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(&ata, XENON_ATA_REG_CMD, ATA_CMD_SMART);
 
-	if (!ata_wait_not_busy() || !ata_wait_drq())
+	if (!ata_wait_not_busy(&ata) || !ata_wait_drq(&ata))
 		return 0;
 
 	for (i = 0; i < 128; i++)
@@ -1579,36 +1657,36 @@ static int drive_health(void)
 {
 	uint8_t mid, high;
 
-	if (!ata.ioaddress || !ata_wait_not_busy())
+	if (!ata.ioaddress || !ata_wait_not_busy(&ata))
 		return HEALTH_UNKNOWN;
 
-	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
-	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_ENABLE_OPS);
-	ata_reg_write(XENON_ATA_REG_SECTORS, 0);
-	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
-	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
-	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
-	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+	ata_reg_write(&ata, XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(&ata, XENON_ATA_REG_FEATURES, SMART_ENABLE_OPS);
+	ata_reg_write(&ata, XENON_ATA_REG_SECTORS, 0);
+	ata_reg_write(&ata, XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(&ata, XENON_ATA_REG_CMD, ATA_CMD_SMART);
 
-	if (!ata_wait_not_busy())
+	if (!ata_wait_not_busy(&ata))
 		return HEALTH_UNKNOWN;
 
-	ata_reg_write(XENON_ATA_REG_DISK, 0xE0);
-	ata_reg_write(XENON_ATA_REG_FEATURES, SMART_RETURN_STATUS);
-	ata_reg_write(XENON_ATA_REG_SECTORS, 0);
-	ata_reg_write(XENON_ATA_REG_LBALOW, 0);
-	ata_reg_write(XENON_ATA_REG_LBAMID, 0x4F);
-	ata_reg_write(XENON_ATA_REG_LBAHIGH, 0xC2);
-	ata_reg_write(XENON_ATA_REG_CMD, ATA_CMD_SMART);
+	ata_reg_write(&ata, XENON_ATA_REG_DISK, 0xE0);
+	ata_reg_write(&ata, XENON_ATA_REG_FEATURES, SMART_RETURN_STATUS);
+	ata_reg_write(&ata, XENON_ATA_REG_SECTORS, 0);
+	ata_reg_write(&ata, XENON_ATA_REG_LBALOW, 0);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAMID, 0x4F);
+	ata_reg_write(&ata, XENON_ATA_REG_LBAHIGH, 0xC2);
+	ata_reg_write(&ata, XENON_ATA_REG_CMD, ATA_CMD_SMART);
 
-	if (!ata_wait_not_busy())
+	if (!ata_wait_not_busy(&ata))
 		return HEALTH_UNKNOWN;
 
-	if (ata_reg_read(XENON_ATA_REG_STATUS) & 0x01)
+	if (ata_reg_read(&ata, XENON_ATA_REG_STATUS) & 0x01)
 		return HEALTH_UNKNOWN;
 
-	mid  = ata_reg_read(XENON_ATA_REG_LBAMID);
-	high = ata_reg_read(XENON_ATA_REG_LBAHIGH);
+	mid  = ata_reg_read(&ata, XENON_ATA_REG_LBAMID);
+	high = ata_reg_read(&ata, XENON_ATA_REG_LBAHIGH);
 
 	if (mid == 0x4F && high == 0xC2)
 		return HEALTH_OK;
@@ -1685,6 +1763,14 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 	if (dev == &atapi)
 	{
+		const char *fw = drive_firmware(dev, 1);
+
+		if (fw)
+		{
+			print_sep();
+			printf("Firmware %s", fw);
+		}
+
 		if (drive_match(dev) == DRIVE_SWAPPED)
 		{
 			print_sep();
