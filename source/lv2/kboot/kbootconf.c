@@ -45,10 +45,14 @@ extern struct netif netif;
 
 char *strip(char *buf)
 {
-	while (*buf == ' ' || *buf == '\t')
+	while (*buf == ' ' || *buf == '\t' || *buf == '\r')
 		buf++;
+
+	if (!*buf)
+		return buf;
+
 	char *end = buf + strlen(buf) - 1;
-	while (*end == ' ' || *end == '\t')
+	while (*end == ' ' || *end == '\t' || *end == '\r')
 		*end-- = 0;
 
 	return buf;
