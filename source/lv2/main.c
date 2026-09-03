@@ -2645,11 +2645,15 @@ int main(){
 				}
 			}
 
-			if (bootloaders()->cb_mfg)
 			{
-				print_sep();
-				print_coloured(CONSOLE_WARN,
-					"Manufacturing Mode Bootloader");
+				unsigned char vf[VFUSES_LEN];
+
+				if (bootloaders()->cb_mfg && read_vfuses(vf))
+				{
+					print_sep();
+					print_coloured(CONSOLE_WARN,
+						"Manufacturing Mode Bootloader");
+				}
 			}
 		}
 	}
