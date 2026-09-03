@@ -20,7 +20,9 @@
 #include "config.h"
 #include "file.h"
 #include "kboot/kbootconf.h"
+#ifndef NO_TFTP
 #include "tftp/tftp.h"
+#endif
 
 #define GZIP_HEADER_SIZE 10
 
@@ -244,6 +246,7 @@ void fileloop() {
   }
 }
 
+#ifndef NO_TFTP
 void tftp_loop(ip_addr_t server) {
   int i = 0;
   do {
@@ -269,3 +272,4 @@ void tftp_loop(ip_addr_t server) {
   /* Assume that bootfile delivered via DHCP is an ELF */
   boot_tftp(server, boot_file_name(), TYPE_ELF);
 }
+#endif

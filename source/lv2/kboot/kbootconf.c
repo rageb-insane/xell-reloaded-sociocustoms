@@ -25,7 +25,10 @@ see file COPYING or http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
 #include <console/console.h>
 #include <xenon_soc/xenon_power.h>
 
+#include "config.h"
+#ifndef NO_TFTP
 #include "tftp/tftp.h"
+#endif
 #include "kbootconf.h"
 #include "file.h"
 
@@ -81,8 +84,10 @@ int kboot_loadfile(char *filename, int type)
 	else {
 		ret = try_load_local(filename,type);
 
+#ifndef NO_TFTP
 		if (ret < 0)
 			ret = boot_tftp(boot_server_name(),filename,type);
+#endif
 	}
 		
 	return ret;

@@ -23,4 +23,6 @@ int launch_file(void * addr, unsigned len, int filetype);
 int try_load_file(char *filename, int filetype);
 int try_load_local(char *filename, int filetype);
 void fileloop();
+#ifndef NO_TFTP
 void tftp_loop();
+#endif
