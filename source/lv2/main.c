@@ -1822,14 +1822,12 @@ static void detect_line(const char *label, int present, struct xenon_ata_device 
 
 #define BL_STAGE_2BL  2
 #define CB_X_RGH13    42069
-#define CB_FLAG_MFG   0x01
 
 struct bl_chain
 {
 	int count;
 	int dev;
 	int cb_count;
-	int cb_mfg;
 	unsigned int cb_a;
 	unsigned int cb_b;
 	unsigned int cb_x;
@@ -1875,10 +1873,7 @@ static const struct bl_chain *bootloaders(void)
 		if ((hdr[1] & 0x0F) == BL_STAGE_2BL)
 		{
 			if (chain.cb_count == 0)
-			{
-				chain.cb_mfg = (hdr[7] & CB_FLAG_MFG) ? 1 : 0;
 				chain.dev = (hdr[0] != 'C') ? 1 : 0;
-			}
 
 			cb_build[chain.cb_count++] = chain.build[chain.count];
 		}
@@ -2648,11 +2643,11 @@ int main(){
 			{
 				unsigned char vf[VFUSES_LEN];
 
-				if (bootloaders()->cb_mfg && read_vfuses(vf))
+				if (read_vfuses(vf))
 				{
 					print_sep();
 					print_coloured(CONSOLE_WARN,
-						"Manufacturing Mode Bootloader");
+						"Emulated Fuses");
 				}
 			}
 		}
