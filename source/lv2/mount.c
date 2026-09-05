@@ -250,6 +250,8 @@ static void AddPartition(sec_t sector, int device, int type, int *devnum) {
 				strcpy(part[device][*devnum].name, "DVD");
 			break;
 #endif
+		default:
+			return;
 	}
 
 	int c = strlen(part[device][*devnum].name) - 1;
@@ -494,6 +496,24 @@ static int FindPartitions(int device) {
 			}
 		}
 	}
+#ifdef FS_ISO9660
+	if (devnum == 0 && device >= DEVICE_USB_0 && device <= DEVICE_USB_2) {
+		static const u8 iso_magic[6] = { 0x01, 'C', 'D', '0', '0', '1' };
+		int found = 0;
+
+		if (interface->readSectors(64, 1, &sector.buffer)
+				&& !memcmp(sector.buffer, iso_magic, sizeof(iso_magic)))
+			found = 1;
+		else if (interface->readSectors(16, 1, &sector.buffer)
+				&& !memcmp(sector.buffer, iso_magic, sizeof(iso_magic)))
+			found = 1;
+
+		if (found) {
+			debug_printf("Valid ISO9660 volume descriptor found\n");
+			AddPartition(0, device, T_ISO9660, &devnum);
+		}
+	}
+#endif
 	return devnum;
 }
 
