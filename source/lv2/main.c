@@ -96,6 +96,33 @@ static int panel_col(int len)
 	return (left + (LOGO_WIDTH - len * 8) / 2) / 8;
 }
 
+#define MSMARK_SQ   5
+#define MSMARK_GAP  1
+#define MSMARK_SIZE (MSMARK_SQ * 2 + MSMARK_GAP)
+
+static void draw_msmark(int x, int y)
+{
+	static const unsigned char square[4][3] =
+	{
+		{ 0xF1, 0x51, 0x1B },
+		{ 0x80, 0xCC, 0x28 },
+		{ 0x00, 0xAD, 0xEF },
+		{ 0xFB, 0xBC, 0x09 },
+	};
+	int i, sx, sy;
+
+	for (i = 0; i < 4; i++)
+	{
+		int ox = (i & 1) ? MSMARK_SQ + MSMARK_GAP : 0;
+		int oy = (i & 2) ? MSMARK_SQ + MSMARK_GAP : 0;
+
+		for (sy = 0; sy < MSMARK_SQ; sy++)
+			for (sx = 0; sx < MSMARK_SQ; sx++)
+				console_pset(x + ox + sx, y + oy + sy,
+					     square[i][0], square[i][1], square[i][2]);
+	}
+}
+
 void draw_logo()
 {
 	int left;
