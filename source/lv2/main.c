@@ -96,49 +96,9 @@ static int panel_col(int len)
 	return (left + (LOGO_WIDTH - len * 8) / 2) / 8;
 }
 
-static void blend_pset(int x, int y, unsigned int a, int r, int g, int b)
-{
-	unsigned int bg = console_color[0];
-	int r0 = (bg >>  8) & 0xff;
-	int g0 = (bg >> 16) & 0xff;
-	int b0 = (bg >> 24) & 0xff;
-
-	console_pset(x, y,
-		     r0 + (r - r0) * (int)a / 255,
-		     g0 + (g - g0) * (int)a / 255,
-		     b0 + (b - b0) * (int)a / 255);
-}
-
-#define MSMARK_SQ   5
-#define MSMARK_GAP  1
-#define MSMARK_SIZE (MSMARK_SQ * 2 + MSMARK_GAP)
-
-static void draw_msmark(int x, int y)
-{
-	static const unsigned char square[4][3] =
-	{
-		{ 0xF1, 0x51, 0x1B },
-		{ 0x80, 0xCC, 0x28 },
-		{ 0x00, 0xAD, 0xEF },
-		{ 0xFB, 0xBC, 0x09 },
-	};
-	int i, sx, sy;
-
-	for (i = 0; i < 4; i++)
-	{
-		int ox = (i & 1) ? MSMARK_SQ + MSMARK_GAP : 0;
-		int oy = (i & 2) ? MSMARK_SQ + MSMARK_GAP : 0;
-
-		for (sy = 0; sy < MSMARK_SQ; sy++)
-			for (sx = 0; sx < MSMARK_SQ; sx++)
-				console_pset(x + ox + sx, y + oy + sy,
-					     square[i][0], square[i][1], square[i][2]);
-	}
-}
-
 void draw_logo()
 {
-	int left, pass;
+	int left;
 	unsigned int x, y;
 
 	if (!panel_fits())
@@ -146,30 +106,19 @@ void draw_logo()
 
 	left = panel_right() - LOGO_WIDTH;
 
-	for (pass = 0; pass < 2; pass++)
+	for (y = 0; y < LOGO_HEIGHT; y++)
 	{
-		for (y = 0; y < LOGO_HEIGHT; y++)
+		for (x = 0; x < LOGO_WIDTH; x++)
 		{
-			for (x = 0; x < LOGO_WIDTH; x++)
-			{
-				unsigned int a = logo_alpha[y * LOGO_WIDTH + x];
+			unsigned int i = (y * LOGO_WIDTH + x) * 3;
 
-				if (!a)
-					continue;
-
-				if (pass == 0)
-					blend_pset(left + x + SHADOW_DX,
-						   LOGO_TOP + y + SHADOW_DY,
-						   a, 0, 0, 0);
-				else
-					blend_pset(left + x, LOGO_TOP + y,
-						   a, 255, 255, 255);
-			}
+			console_pset(left + x, LOGO_TOP + y,
+				     logo_rgb[i], logo_rgb[i + 1], logo_rgb[i + 2]);
 		}
 	}
 }
 
-#define TEMPS_ROW    9
+#define TEMPS_ROW    17
 #define TEMPS_LINES  4
 #define TEMPS_WIDTH  11
 
