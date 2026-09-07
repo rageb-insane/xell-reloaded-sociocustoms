@@ -33,7 +33,6 @@
 
 #include "config.h"
 #include "file.h"
-#include "discord.h"
 #include "logo.h"
 
 #ifndef NO_TFTP
@@ -170,16 +169,12 @@ void draw_logo()
 	}
 }
 
-#define DISCORD_TEXT   "@socioculture"
-#define DISCORD_COLOUR 0xF2655800
-#define DISCORD_ROW  9
-#define TEMPS_ROW    11
+#define TEMPS_ROW    9
 #define TEMPS_LINES  4
 #define TEMPS_WIDTH  11
 
 #define LOGO_BAND_H ((TEMPS_ROW + TEMPS_LINES) * 16)
 
-static void draw_discord(void);
 static void draw_temperatures(void);
 
 static int overscan_top(void)
@@ -207,7 +202,6 @@ static void redraw_logo(void)
 			console_pset(left + x, y, r0, g0, b0);
 
 	draw_logo();
-	draw_discord();
 	draw_temperatures();
 }
 
@@ -1095,48 +1089,6 @@ static const char *smc_version(void)
 		return NULL;
 
 	return text;
-}
-
-#define BLURPLE_R ((DISCORD_COLOUR >>  8) & 0xff)
-#define BLURPLE_G ((DISCORD_COLOUR >> 16) & 0xff)
-#define BLURPLE_B ((DISCORD_COLOUR >> 24) & 0xff)
-#define DISCORD_GAP 4
-
-static void draw_discord(void)
-{
-	int len, left, combo, col, iconx, icony, x, y;
-	unsigned int ix, iy;
-
-	if (!panel_fits())
-		return;
-
-	len   = (int)strlen(DISCORD_TEXT);
-	left  = panel_right() - LOGO_WIDTH;
-	combo = DISCORD_WIDTH + DISCORD_GAP + len * 8;
-	col   = (left + (LOGO_WIDTH - combo) / 2 + DISCORD_WIDTH + DISCORD_GAP) / 8;
-	iconx = col * 8 - DISCORD_GAP - DISCORD_WIDTH;
-	icony = DISCORD_ROW * 16 + (16 - DISCORD_HEIGHT) / 2;
-	x     = console_get_cursor_x();
-	y     = console_get_cursor_y();
-
-	for (iy = 0; iy < DISCORD_HEIGHT; iy++)
-	{
-		for (ix = 0; ix < DISCORD_WIDTH; ix++)
-		{
-			unsigned int a = discord_alpha[iy * DISCORD_WIDTH + ix];
-
-			if (!a)
-				continue;
-
-			blend_pset(iconx + ix, icony + iy, a,
-				   BLURPLE_R, BLURPLE_G, BLURPLE_B);
-		}
-	}
-
-	console_set_cursor(col, DISCORD_ROW);
-	print_coloured(DISCORD_COLOUR, DISCORD_TEXT);
-
-	console_set_cursor(x, y);
 }
 
 #define TEMP_WARN 69
@@ -2546,11 +2498,8 @@ int main(){
 	if (panel_fits())
 		printf("XeLL git-" GITREV " - (C) 2007-2026 LibXenon.org, Free60.org\n\n");
 	else
-	{
-		printf("SocioCustoms ");
-		print_coloured(DISCORD_COLOUR, DISCORD_TEXT);
-		printf(" - XeLL git-" GITREV " - LibXenon.org, Free60.org\n\n");
-	}
+		printf("Ghost Systems - XeLL git-" GITREV
+		       " - LibXenon.org, Free60.org\n\n");
 
 	console_close();
 	printf("XeLL - Xenon linux loader second stage " LONGVERSION "\n");
